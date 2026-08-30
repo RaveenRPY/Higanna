@@ -3,15 +3,17 @@ import {
   autoActOnTimeout,
   createRoom,
   generateRoomCode,
-  kingGiveCard,
   passTurn,
   playCards,
   removePlayer,
   resolvePendingClose,
+  kickPlayer,
+  setPlayerLobbyReady,
   startMatch,
   stopMatch,
   syncTurnDeadline,
   toClientView,
+  tributeCard,
 } from "../lib/engine";
 import type { ClientView, JokerDeclaration, RoomState } from "../lib/types";
 
@@ -154,6 +156,14 @@ export function startGame(code: string, playerId: string) {
   return mutate(code, (room) => startMatch(room, playerId));
 }
 
+export function setLobbyReady(code: string, playerId: string, ready: boolean) {
+  return mutate(code, (room) => setPlayerLobbyReady(room, playerId, ready));
+}
+
+export function kickFromLobby(code: string, hostId: string, targetId: string) {
+  return mutate(code, (room) => kickPlayer(room, hostId, targetId));
+}
+
 export function stopGame(code: string, playerId: string) {
   clearCloseTimer(code);
   clearTurnTimer(code);
@@ -174,7 +184,7 @@ export function pass(code: string, playerId: string) {
 }
 
 export function tribute(code: string, playerId: string, cardId: string) {
-  return mutate(code, (room) => kingGiveCard(room, playerId, cardId));
+  return mutate(code, (room) => tributeCard(room, playerId, cardId));
 }
 
 export function getRoom(code: string): RoomState | undefined {

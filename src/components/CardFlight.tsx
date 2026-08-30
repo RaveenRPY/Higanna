@@ -32,11 +32,11 @@ export function measureFlightRect(selector: string, size: CardSize): FlightRect 
   return { x: cx - w / 2, y: cy - h / 2, w, h, angle };
 }
 
-export function estimateYouSeatPreviewRect(count: number, index: number): FlightRect {
+export function estimateYouSeatPreviewRect(count: number, index: number, size: CardSize = "md"): FlightRect {
   const seat = document.querySelector("[data-you-seat]");
   const table = document.querySelector("[data-game-table]");
   const base = (seat ?? table)?.getBoundingClientRect();
-  const { w, h } = CARD_SIZE.md;
+  const { w, h } = CARD_SIZE[size];
   const mid = (count - 1) / 2;
   const angle = (index - mid) * 5;
   const gap = 6;
@@ -57,16 +57,32 @@ export function estimateYouSeatPreviewRect(count: number, index: number): Flight
 }
 
 /** Estimate where a card will sit in the hand fan after layout. */
-export function estimateHandCardRect(visibleCount: number, index: number): FlightRect {
+export function estimateHandCardRect(
+  visibleCount: number,
+  index: number,
+  size: CardSize = "lg",
+  compact = false,
+): FlightRect {
   const root = document.querySelector("[data-hand-root]");
-  const { w, h } = CARD_SIZE.lg;
+  const { w, h } = CARD_SIZE[size];
   const r = root?.getBoundingClientRect();
   const n = Math.max(visibleCount, 1);
-  const preferred = n <= 4 ? 52 : n <= 8 ? 42 : n <= 14 ? 30 : 22;
-  const rotStep = n <= 4 ? 5 : n <= 10 ? 3.4 : n <= 16 ? 2.4 : 1.6;
+  const preferred = compact
+    ? n <= 4
+      ? 28
+      : 20
+    : n <= 4
+      ? 52
+      : n <= 8
+        ? 42
+        : n <= 14
+          ? 30
+          : 22;
+  const rotStep = compact ? 2 : n <= 4 ? 5 : n <= 10 ? 3.4 : n <= 16 ? 2.4 : 1.6;
   const mid = (n - 1) / 2;
   const boxW = r?.width ?? 400;
-  const maxStep = n <= 1 ? 0 : Math.max(18, (Math.max(boxW, w) - w - 16) / (n - 1));
+  const minStep = compact ? 14 : 18;
+  const maxStep = n <= 1 ? 0 : Math.max(minStep, (Math.max(boxW, w) - w - 12) / (n - 1));
   const step = Math.min(preferred, maxStep);
   const dx = (index - mid) * step;
   const angle = (index - mid) * rotStep;
@@ -75,10 +91,10 @@ export function estimateHandCardRect(visibleCount: number, index: number): Fligh
   return { x: cx - w / 2, y: cy - h / 2, w, h, angle };
 }
 
-export function estimateTableCenterRect(): FlightRect {
+export function estimateTableCenterRect(size: CardSize = "md"): FlightRect {
   const table = document.querySelector("[data-game-table]");
   const r = table?.getBoundingClientRect();
-  const { w, h } = CARD_SIZE.md;
+  const { w, h } = CARD_SIZE[size];
   if (!r) {
     return { x: window.innerWidth / 2 - w / 2, y: window.innerHeight * 0.4, w, h, angle: 0 };
   }
@@ -116,6 +132,13 @@ function FlyingCard({ flight, onDone }: { flight: CardFlight; onDone: () => void
     const node = nodeRef.current;
     if (!node) return;
 
+    let finished = false;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      onDoneRef.current();
+    };
+
     const fromCx = flight.from.x + flight.from.w / 2;
     const fromCy = flight.from.y + flight.from.h / 2;
     const toCx = flight.to.x + flight.to.w / 2;
@@ -124,7 +147,6 @@ function FlyingCard({ flight, onDone }: { flight: CardFlight; onDone: () => void
     const dy = toCy - fromCy;
     const scale = flight.to.w / Math.max(flight.from.w, 1);
 
-    // WAAPI avoids the CSS-transition first-frame flash.
     const anim = node.animate(
       [
         {
@@ -141,11 +163,13 @@ function FlyingCard({ flight, onDone }: { flight: CardFlight; onDone: () => void
       },
     );
 
-    anim.onfinish = () => onDoneRef.current();
+    anim.onfinish = done;
+    const t = window.setTimeout(done, flight.durationMs + 120);
     return () => {
+      window.clearTimeout(t);
       anim.cancel();
     };
-  }, [flight]);
+  }, [flight.key, flight.durationMs, flight.from, flight.to]);
 
   return (
     <div

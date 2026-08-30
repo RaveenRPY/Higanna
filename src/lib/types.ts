@@ -60,6 +60,8 @@ export type Player = {
   connected: boolean;
   isHost: boolean;
   passed: boolean;
+  /** Guest is ready to start (host is always treated as ready). */
+  lobbyReady: boolean;
 };
 
 export type PendingClose = {
@@ -78,6 +80,8 @@ export type RoomState = {
   /** Absolute ms when the current turn times out (server clock). */
   turnDeadlineAt: number | null;
   lastPlay: Play | null;
+  /** Every play in the current trick, oldest first (shown stacked on the table). */
+  trickPlays: Play[];
   /**
    * Length of the current consecutive (+1 rank) chain this trick.
    * Used with trickPlayCount — lock only if the first 3 plays are consecutive.
@@ -106,6 +110,7 @@ export type PublicPlayer = {
   connected: boolean;
   isHost: boolean;
   passed: boolean;
+  lobbyReady: boolean;
 };
 
 export type ClientView = {
@@ -116,6 +121,8 @@ export type ClientView = {
   /** Absolute ms when the current turn times out (same clock as Date.now() on client). */
   turnEndsAt: number | null;
   lastPlay: Play | null;
+  /** Every play in the current trick, oldest first. */
+  trickPlays: Play[];
   log: string[];
   round: number;
   hostId: string;
@@ -139,6 +146,7 @@ export type ClientView = {
     isHost: boolean;
     role: Role | null;
     passed: boolean;
+    lobbyReady: boolean;
   } | null;
   error?: string;
 };

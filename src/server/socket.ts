@@ -4,9 +4,11 @@ import {
   ensureTurnClock,
   hostCreate,
   joinRoom,
+  kickFromLobby,
   leaveRoom,
   pass,
   play,
+  setLobbyReady,
   setRoomUpdateListener,
   startGame,
   stopGame,
@@ -83,6 +85,47 @@ export function attachGameSocket(io: Server) {
         socket.emit("toast", result.error);
         return;
       }
+      emitRoom(io, result.code);
+    });
+
+    socket.on(
+      "lobbyReady",
+      ({
+        code,
+        playerId,
+        ready,
+      }: {
+        code?: string;
+        playerId?: string;
+        ready?: boolean;
+      }) => {
+        const roomCode = code || socket.roomCode;
+        const id = playerId || socket.playerId;
+        if (!roomCode || !id) {
+          socket.emit("toast", "Not connected to a room.");
+          return;
+        }
+        socket.roomCode = roomCode;
+        socket.playerId = id;
+        const result = setLobbyReady(roomCode, id, Boolean(ready));
+        if ("error" in result) {
+          socket.emit("toast", result.error);
+          return;
+        }
+        emitRoom(io, result.code);
+      },
+    );
+
+    socket.on("kick", ({ playerId: targetId }: { playerId?: string }) => {
+      if (!socket.roomCode || !socket.playerId || !targetId) return;
+      const code = socket.roomCode;
+      const result = kickFromLobby(code, socket.playerId, targetId);
+      if ("error" in result) {
+        socket.emit("toast", result.error);
+        return;
+      }
+      io.to(`player:${targetId}`).emit("kicked", "The host removed you from the room.");
+      void io.in(`player:${targetId}`).socketsLeave(code);
       emitRoom(io, result.code);
     });
 

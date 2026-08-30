@@ -1,4 +1,4 @@
-# හිගන්නා
+# හිඟන්නා
 
 Realtime multiplayer card game built with Next.js and Socket.IO.
 
@@ -21,5 +21,5 @@ Host creates a room, others join with the room code. Minimum 3 players. Host sta
 - Lead with: one card, 2–4 of a kind, or a same-suit consecutive run (e.g. Heart 3-4-5-6 or Heart J-Q-K).
 - Follow the same pattern with a strictly higher value, any suit. Otherwise **Pass**.
 - A 2 (or Joker as 2) closes the round; that player leads the next round.
-- First out: **King (රජු)**. Second: **Queen (රැජින)**. Last with cards: **Beggar (හිගන්නා)**.
+- First out: **King (රජු)**. Second: **Queen (රැජින)**. Last with cards: **Beggar (හිඟන්නා)**.
 - Next deal: beggar gives their best card (Joker or highest) to the king. King gives any card back. Queen leads.

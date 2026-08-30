@@ -51,7 +51,7 @@ app.prepare().then(() => {
 
   httpServer.listen(port, listenHost, () => {
     const lan = lanAddress();
-    console.log(`හිගන්නා ready on http://localhost:${port}`);
+    console.log(`හිඟන්නා ready on http://localhost:${port}`);
     if (lan) console.log(`Share on LAN: http://${lan}:${port}`);
   });
 });

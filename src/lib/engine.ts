@@ -141,11 +141,13 @@ export function createRoom(code: string, host: { id: string; name: string }): Ro
         connected: true,
         isHost: true,
         passed: false,
+        lobbyReady: true,
       },
     ],
     currentTurnId: null,
     turnDeadlineAt: null,
     lastPlay: null,
+    trickPlays: [],
     patternStreak: 0,
     trickPlayCount: 0,
     patternLocked: false,
@@ -191,6 +193,7 @@ export function addPlayer(
         connected: true,
         isHost: false,
         passed: false,
+        lobbyReady: false,
       },
     ],
     log: [`${player.name} joined`, ...state.log].slice(0, 40),
@@ -204,7 +207,7 @@ export function removePlayer(state: RoomState, playerId: string): RoomState | nu
     let hostId = state.hostId;
     if (playerId === state.hostId) {
       hostId = players[0].id;
-      players[0] = { ...players[0], isHost: true };
+      players[0] = { ...players[0], isHost: true, lobbyReady: true };
     }
     return { ...state, hostId, players };
   }
@@ -429,10 +432,10 @@ function deal(state: RoomState): RoomState {
     finishOrder: null,
     passed: false,
   }));
-  return { ...state, players, lastPlay: null, patternStreak: 0, trickPlayCount: 0, patternLocked: false };
+  return { ...state, players, lastPlay: null, trickPlays: [], patternStreak: 0, trickPlayCount: 0, patternLocked: false };
 }
 
-function applyTributeFromBeggar(state: RoomState): RoomState {
+function beginTribute(state: RoomState): RoomState {
   const beggar = state.players.find((p) => p.role === "beggar");
   const king = state.players.find((p) => p.role === "king");
   if (!beggar || !king || beggar.hand.length === 0 || king.id === beggar.id) {
@@ -442,25 +445,15 @@ function applyTributeFromBeggar(state: RoomState): RoomState {
       currentTurnId: queenOrFallback(state),
     };
   }
-  const tribute = highestCard(beggar.hand);
-  const players = state.players.map((p) => {
-    if (p.id === beggar.id) {
-      return { ...p, hand: sortHand(p.hand.filter((c) => c.id !== tribute.id)) };
-    }
-    if (p.id === king.id) {
-      return { ...p, hand: sortHand([...p.hand, tribute]) };
-    }
-    return p;
-  });
   return {
     ...state,
     phase: "tribute",
-    players,
-    currentTurnId: king.id,
+    currentTurnId: beggar.id,
     log: [
-      `හිගන්නා (${beggar.name}) gave their best card (${cardLabel(tribute)}) to රජු. රජු must give any card back.`,
+      `හිඟන්නා (${beggar.name}) must choose a card for රජු (${king.name}).`,
       ...state.log,
     ].slice(0, 40),
+    announcement: `හිඟන්නා — choose a card for රජු.`,
   };
 }
 
@@ -471,6 +464,39 @@ function queenOrFallback(state: RoomState): string {
   return host?.id ?? state.players[0].id;
 }
 
+export function setPlayerLobbyReady(
+  state: RoomState,
+  playerId: string,
+  ready: boolean,
+): RoomState | { error: string } {
+  if (state.phase !== "lobby") return { error: "Ready is only used in the lobby." };
+  if (playerId === state.hostId) return { error: "The host is always ready." };
+  const actor = player(state, playerId);
+  if (!actor) return { error: "Player not found." };
+  return {
+    ...state,
+    players: state.players.map((p) => (p.id === playerId ? { ...p, lobbyReady: ready } : p)),
+  };
+}
+
+export function kickPlayer(
+  state: RoomState,
+  hostId: string,
+  targetId: string,
+): RoomState | { error: string } {
+  if (state.phase !== "lobby") return { error: "You can only remove players before the game starts." };
+  if (hostId !== state.hostId) return { error: "Only the host can remove a player." };
+  if (targetId === hostId) return { error: "You cannot remove yourself." };
+  const target = player(state, targetId);
+  if (!target) return { error: "Player not found." };
+  const next = removePlayer(state, targetId);
+  if (!next) return { error: "Could not remove that player." };
+  return {
+    ...next,
+    log: [`${target.name} was removed by the host.`, ...next.log].slice(0, 40),
+  };
+}
+
 export function startMatch(state: RoomState, requesterId: string): RoomState | { error: string } {
   if (requesterId !== state.hostId) return { error: "Only the host can start the game." };
   if (state.phase !== "lobby" && state.phase !== "finished") {
@@ -479,6 +505,12 @@ export function startMatch(state: RoomState, requesterId: string): RoomState | {
   if (state.players.filter((p) => p.connected).length < MIN_PLAYERS) {
     return { error: `At least ${MIN_PLAYERS} players are required.` };
   }
+  if (state.phase === "lobby") {
+    const waiting = state.players.filter((p) => p.connected && p.id !== state.hostId && !p.lobbyReady);
+    if (waiting.length > 0) {
+      return { error: "Everyone must be ready before you can start." };
+    }
+  }
   const seated = {
     ...state,
     players: state.players.filter((p) => p.connected),
@@ -486,6 +518,7 @@ export function startMatch(state: RoomState, requesterId: string): RoomState | {
     announcement: null,
     pendingClose: null,
     lastPlay: null,
+    trickPlays: [],
   };
   if (seated.hostId !== seated.players[0].id && !seated.players.some((p) => p.id === seated.hostId)) {
     seated.hostId = seated.players[0].id;
@@ -494,7 +527,7 @@ export function startMatch(state: RoomState, requesterId: string): RoomState | {
   const dealt = deal(seated);
   const hadRoles = dealt.players.some((p) => p.role);
   if (hadRoles) {
-    const tributed = applyTributeFromBeggar(dealt);
+    const tributed = beginTribute(dealt);
     return tributed;
   }
   return {
@@ -519,6 +552,7 @@ export function stopMatch(state: RoomState, requesterId: string): RoomState | { 
     currentTurnId: null,
     turnDeadlineAt: null,
     lastPlay: null,
+    trickPlays: [],
     patternStreak: 0,
     trickPlayCount: 0,
     patternLocked: false,
@@ -531,6 +565,7 @@ export function stopMatch(state: RoomState, requesterId: string): RoomState | { 
       finishOrder: null,
       passed: false,
       isHost: p.id === state.hostId,
+      lobbyReady: p.id === state.hostId,
     })),
     log: [`${host?.name ?? "Host"} stopped the game. Back to lobby.`, ...state.log].slice(0, 40),
   };
@@ -569,7 +604,7 @@ function finishIfNeeded(state: RoomState, actorId: string): RoomState {
         players: next.players.map((p) =>
           p.id === remaining[0].id ? { ...p, role: "beggar", finishOrder: next.players.length } : p,
         ),
-        log: [`${remaining[0].name} was last with cards — හිගන්නා.`, ...next.log].slice(0, 40),
+        log: [`${remaining[0].name} was last with cards — හිඟන්නා.`, ...next.log].slice(0, 40),
       };
     }
     return {
@@ -577,6 +612,7 @@ function finishIfNeeded(state: RoomState, actorId: string): RoomState {
       phase: "finished",
       currentTurnId: null,
       lastPlay: null,
+      trickPlays: [],
       patternStreak: 0,
       trickPlayCount: 0,
       patternLocked: false,
@@ -593,6 +629,7 @@ function beginTrick(state: RoomState, leaderId: string): RoomState {
   return {
     ...state,
     lastPlay: null,
+    trickPlays: [],
     patternStreak: 0,
     trickPlayCount: 0,
     patternLocked: false,
@@ -722,6 +759,7 @@ export function playCards(
         : p,
     ),
     lastPlay: play,
+    trickPlays: [...(state.trickPlays ?? []), play],
     patternStreak,
     trickPlayCount,
     patternLocked: patternLocked || justLocked,
@@ -804,6 +842,37 @@ export function passTurn(state: RoomState, playerId: string): RoomState | { erro
   return { ...marked, currentTurnId: nxt };
 }
 
+export function beggarGiveCard(
+  state: RoomState,
+  playerId: string,
+  cardId: string,
+): RoomState | { error: string } {
+  if (state.phase !== "tribute") return { error: "It is not time for tribute." };
+  const beggar = state.players.find((p) => p.role === "beggar");
+  const king = state.players.find((p) => p.role === "king");
+  if (!beggar || beggar.id !== playerId) return { error: "Only හිඟන්නා can give a card now." };
+  if (!king) return { error: "රජු was not found." };
+  if (state.currentTurnId !== beggar.id) return { error: "Wait for your turn to give a card." };
+  const card = beggar.hand.find((c) => c.id === cardId);
+  if (!card) return { error: "That card is not in your hand." };
+
+  const players = state.players.map((p) => {
+    if (p.id === beggar.id) return { ...p, hand: sortHand(p.hand.filter((c) => c.id !== cardId)) };
+    if (p.id === king.id) return { ...p, hand: sortHand([...p.hand, card]) };
+    return p;
+  });
+  return {
+    ...state,
+    players,
+    currentTurnId: king.id,
+    announcement: `රජු — give a card back to හිඟන්නා.`,
+    log: [
+      `හිඟන්නා (${beggar.name}) gave ${cardLabel(card)} to රජු. රජු must give any card back.`,
+      ...state.log,
+    ].slice(0, 40),
+  };
+}
+
 export function kingGiveCard(
   state: RoomState,
   playerId: string,
@@ -813,7 +882,8 @@ export function kingGiveCard(
   const king = state.players.find((p) => p.role === "king");
   const beggar = state.players.find((p) => p.role === "beggar");
   if (!king || king.id !== playerId) return { error: "Only රජු can give a card." };
-  if (!beggar) return { error: "හිගන්නා was not found." };
+  if (!beggar) return { error: "හිඟන්නා was not found." };
+  if (state.currentTurnId !== king.id) return { error: "Wait — හිඟන්නා is still choosing a card." };
   const card = king.hand.find((c) => c.id === cardId);
   if (!card) return { error: "That card is not in your hand." };
 
@@ -829,11 +899,27 @@ export function kingGiveCard(
     phase: "playing",
     currentTurnId: queenId,
     lastPlay: null,
+    trickPlays: [],
+    announcement: null,
     log: [
-      `රජු (${king.name}) gave ${cardLabel(card)} to හිගන්නා. රැජින leads the round.`,
+      `රජු (${king.name}) gave ${cardLabel(card)} to හිඟන්නා. රැජින leads the round.`,
       ...state.log,
     ].slice(0, 40),
   };
+}
+
+export function tributeCard(
+  state: RoomState,
+  playerId: string,
+  cardId: string,
+): RoomState | { error: string } {
+  if (state.phase !== "tribute") return { error: "It is not time for tribute." };
+  if (state.currentTurnId !== playerId) return { error: "It is not your turn to give a card." };
+  const actor = player(state, playerId);
+  if (!actor) return { error: "Player not found." };
+  if (actor.role === "beggar") return beggarGiveCard(state, playerId, cardId);
+  if (actor.role === "king") return kingGiveCard(state, playerId, cardId);
+  return { error: "You are not giving a card." };
 }
 
 export function toClientView(state: RoomState, viewerId?: string): ClientView {
@@ -846,6 +932,12 @@ export function toClientView(state: RoomState, viewerId?: string): ClientView {
     currentTurnId: state.currentTurnId,
     turnEndsAt: state.turnDeadlineAt,
     lastPlay: state.lastPlay,
+    trickPlays:
+      state.trickPlays && state.trickPlays.length > 0
+        ? state.trickPlays
+        : state.lastPlay
+          ? [state.lastPlay]
+          : [],
     patternStreak: state.patternStreak ?? 0,
     trickPlayCount: state.trickPlayCount ?? 0,
     patternLocked: Boolean(state.patternLocked),
@@ -861,6 +953,7 @@ export function toClientView(state: RoomState, viewerId?: string): ClientView {
       connected: p.connected,
       isHost: p.id === state.hostId,
       passed: p.passed,
+      lobbyReady: Boolean(p.isHost || p.lobbyReady || p.id === state.hostId),
     })),
     you: you
       ? {
@@ -870,6 +963,7 @@ export function toClientView(state: RoomState, viewerId?: string): ClientView {
           isHost: you.id === state.hostId,
           role: you.role,
           passed: you.passed,
+          lobbyReady: Boolean(you.id === state.hostId || you.lobbyReady),
         }
       : null,
   };
@@ -906,8 +1000,11 @@ export function autoActOnTimeout(state: RoomState, playerId: string): RoomState 
   if (state.phase === "tribute") {
     const actor = player(state, playerId);
     if (!actor || actor.hand.length === 0) return { error: "No cards to give." };
-    const card = [...actor.hand].sort((a, b) => cardStrength(a) - cardStrength(b))[0];
-    const result = kingGiveCard(state, playerId, card.id);
+    const card =
+      actor.role === "beggar"
+        ? highestCard(actor.hand)
+        : [...actor.hand].sort((a, b) => cardStrength(a) - cardStrength(b))[0];
+    const result = tributeCard(state, playerId, card.id);
     if ("error" in result) return result;
     return {
       ...result,

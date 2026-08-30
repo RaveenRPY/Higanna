@@ -166,16 +166,29 @@ export function CardFan({
 
   if (n === 0) {
     if (cards.length === 0 && emptyLabel) {
-      return <p className="py-10 text-center text-amber-100/50">{emptyLabel}</p>;
+      return (
+        <div className="relative mx-auto w-full" data-hand-root>
+          <p className={compact ? "py-6 text-center text-sm text-amber-100/50" : "py-10 text-center text-amber-100/50"}>
+            {emptyLabel}
+          </p>
+        </div>
+      );
     }
-    return <div ref={wrapRef} className="relative mx-auto w-full" style={{ height: SIZE[size].h + 20 }} />;
+    return (
+      <div
+        ref={wrapRef}
+        className="relative mx-auto w-full"
+        style={{ height: SIZE[size].h + 20 }}
+        data-hand-root
+      />
+    );
   }
 
   // Spread more as the hand shrinks so remaining cards never look stacked.
   const preferred = compact
     ? n <= 4
-      ? 32
-      : 24
+      ? 28
+      : 20
     : n <= 4
       ? 52
       : n <= 8
@@ -183,10 +196,11 @@ export function CardFan({
         : n <= 14
           ? 30
           : 22;
-  const rotStep = compact ? 2.2 : n <= 4 ? 5 : n <= 10 ? 3.4 : n <= 16 ? 2.4 : 1.6;
+  const rotStep = compact ? 2 : n <= 4 ? 5 : n <= 10 ? 3.4 : n <= 16 ? 2.4 : 1.6;
   const mid = (n - 1) / 2;
   const cardW = SIZE[size].w;
-  const maxStep = n <= 1 ? 0 : Math.max(18, (Math.max(boxW, cardW) - cardW - 16) / (n - 1));
+  const minStep = compact ? 14 : 18;
+  const maxStep = n <= 1 ? 0 : Math.max(minStep, (Math.max(boxW, cardW) - cardW - 12) / (n - 1));
   const step = Math.min(preferred, maxStep);
   const height = SIZE[size].h + 20;
 
@@ -211,7 +225,7 @@ export function CardFan({
               // visibility avoids opacity fade glitches during flight handoff
               visibility: ghost ? "hidden" : "visible",
               pointerEvents: ghost ? "none" : undefined,
-              transition: dealIn ? undefined : "transform 280ms cubic-bezier(0.22, 0.82, 0.2, 1)",
+              transition: "transform 280ms cubic-bezier(0.22, 0.82, 0.2, 1)",
             }}
           >
             <div
@@ -222,12 +236,12 @@ export function CardFan({
             >
               <div
                 className={
-                  leavingIds.includes(card.id) ? "play-from-hand" : dealIn ? "deal-into-hand" : ""
+                  leavingIds.includes(card.id)
+                    ? "play-from-hand"
+                    : dealIn && i === n - 1
+                      ? "deal-card-land"
+                      : ""
                 }
-                style={{
-                  animationDelay:
-                    dealIn && !leavingIds.includes(card.id) ? `${180 + i * 48}ms` : undefined,
-                }}
               >
                 <PlayingCard
                   card={card}
@@ -245,10 +259,18 @@ export function CardFan({
   );
 }
 
-export function BackFan({ count, size = "sm" }: { count: number; size?: CardSize }) {
-  const shown = Math.min(count, 8);
+export function BackFan({
+  count,
+  size = "sm",
+  compact = false,
+}: {
+  count: number;
+  size?: CardSize;
+  compact?: boolean;
+}) {
+  const shown = Math.min(count, compact ? 4 : 8);
   if (count <= 0) return null;
-  const step = 10;
+  const step = compact ? 7 : 10;
   const mid = (shown - 1) / 2;
   const width = SIZE[size].w + (shown - 1) * step;
   return (
