@@ -156,7 +156,33 @@ export function attachGameSocket(io: Server) {
         jokerAs?: Record<string, { rank: string; suit: string }>;
       }) => {
         if (!socket.roomCode || !socket.playerId) return;
-        const result = play(socket.roomCode, socket.playerId, cardIds, jokerAs ?? {});
+        // Convert jokerAs to proper JokerDeclaration types
+        let jokerDeclarations: Record<string, any> = {};
+        if (jokerAs) {
+          jokerDeclarations = Object.fromEntries(
+            Object.entries(jokerAs).map(([id, value]) => [
+              id,
+              {
+                rank: value.rank as
+                  | "3"
+                  | "4"
+                  | "5"
+                  | "6"
+                  | "7"
+                  | "8"
+                  | "9"
+                  | "10"
+                  | "J"
+                  | "Q"
+                  | "K"
+                  | "A"
+                  | "2",
+                suit: value.suit as "spades" | "hearts" | "clubs" | "diamonds",
+              },
+            ])
+          );
+        }
+        const result = play(socket.roomCode, socket.playerId, cardIds, jokerDeclarations);
         if ("error" in result) {
           socket.emit("toast", result.error);
           return;
