@@ -25,6 +25,16 @@ import {
   useRoleCelebrations,
   playerHasRoleBadge,
 } from "@/components/RoleCelebration";
+import {
+  flyTowardCenter,
+  LobbyReactionBurst,
+  ReactionButton,
+  ReactionPicker,
+  reactionsForPlayer,
+  SeatReactionBurst,
+  useTableReactions,
+  type LiveReaction,
+} from "@/components/PlayerReactions";
 import { useNarrow } from "@/lib/useNarrow";
 import { clearGameStarted, markGameStarted } from "@/components/SplashScreen";
 import { RANKS, SUITS, type Card, type ClientView, type JokerDeclaration, type PublicPlayer, type Rank, type Suit } from "@/lib/types";
@@ -96,7 +106,7 @@ function seatStyle(index: number, total: number, compact = false): CSSProperties
   const ry = compact ? 33 : 36;
   const x = 50 + rx * Math.cos(angle);
   const y = 48 + ry * Math.sin(angle);
-  return { left: `${x}%`, top: `${y}%`, transform: "translate(-50%, -50%)" };
+  return { left: `${x}%`, top: `${y}%` };
 }
 
 export function GameRoom({
@@ -138,6 +148,15 @@ export function GameRoom({
   const [flights, setFlights] = useState<CardFlight[]>([]);
   const [fallbackTurnEndsAt, setFallbackTurnEndsAt] = useState<number | null>(null);
   const { bursts: roleBursts, dismissBurst: dismissRoleBurst } = useRoleCelebrations(view);
+  const {
+    live: tableReactions,
+    send: sendReaction,
+    pickerOpen,
+    pickerVisible,
+    setPickerOpen,
+    cooling: reactionCooling,
+    cooldownRatio,
+  } = useTableReactions();
   const flightSeq = useRef(0);
   const flightsRef = useRef<CardFlight[]>([]);
   flightsRef.current = flights;
@@ -822,11 +841,14 @@ export function GameRoom({
             </button>
           </div>
 
-          <span className="flex-1" /> 
+          <span className="flex-1" />
 
-          
-     
-          
+          <ReactionButton
+            onClick={() => setPickerOpen((open) => !open)}
+            cooldownRatio={cooldownRatio}
+            open={pickerOpen}
+          />
+
           <button
             type="button"
             onClick={async () => {
@@ -978,7 +1000,7 @@ export function GameRoom({
 
       {view.phase === "lobby" ? (
         <div key="lobby" className="flex-1">
-          <Lobby view={view} onKick={(p) => setKickTarget(p)} />
+          <Lobby view={view} onKick={(p) => setKickTarget(p)} reactions={tableReactions} />
         </div>
       ) : (
         <div
@@ -1032,7 +1054,9 @@ export function GameRoom({
             </div>
           ) : null}
 
-          {seated.map((p, i) => (
+          {seated.map((p, i) => {
+            const fly = flyTowardCenter(i, seated.length, narrow);
+            return (
             <Seat
               key={p.id}
               player={p}
@@ -1051,8 +1075,12 @@ export function GameRoom({
               }
               ghostIds={ghostIds}
               onPreviewClick={canPick ? toggle : undefined}
+              reactions={reactionsForPlayer(tableReactions, p.id)}
+              flyX={fly.x}
+              flyY={fly.y}
             />
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -1190,6 +1218,14 @@ export function GameRoom({
 
       </section>
       ) : null}
+
+      <ReactionPicker
+        open={pickerOpen}
+        visible={pickerVisible}
+        onClose={() => setPickerOpen(false)}
+        onSend={sendReaction}
+        cooling={reactionCooling}
+      />
     </div>
   );
 }
@@ -1207,6 +1243,9 @@ function Seat({
   compact = false,
   previewSize = "md",
   showRoleCrown = false,
+  reactions = [],
+  flyX = 0,
+  flyY = -36,
 }: {
   player: PublicPlayer;
   style: CSSProperties;
@@ -1220,6 +1259,9 @@ function Seat({
   compact?: boolean;
   previewSize?: CardSize;
   showRoleCrown?: boolean;
+  reactions?: LiveReaction[];
+  flyX?: number;
+  flyY?: number;
 }) {
   const showPreview = Boolean(isYou && previewCards && previewCards.length > 0);
   const ghostSet = new Set(ghostIds);
@@ -1231,13 +1273,16 @@ function Seat({
 
   return (
     <div
-      className={["absolute z-10 flex flex-col items-center", isTurn ? "turn-seat-glow" : ""].join(
-        " ",
-      )}
+      className={["absolute", reactions.length > 0 ? "z-30" : "z-10"].join(" ")}
       style={style}
-      data-seat-id={player.id}
-      data-you-seat={isYou ? "1" : undefined}
     >
+      <SeatReactionBurst reactions={reactions} flyX={flyX} flyY={flyY} compact={compact} />
+      <div
+        className={["flex flex-col items-center", isTurn ? "turn-seat-glow" : ""].join(" ")}
+        style={{ transform: "translate(-50%, -50%)" }}
+        data-seat-id={player.id}
+        data-you-seat={isYou ? "1" : undefined}
+      >
       {showRoleCrown && player.role ? (
         <RoleCrown role={player.role} compact={compact} className={compact ? "mb-0.5" : "mb-1"} />
       ) : null}
@@ -1344,6 +1389,7 @@ function Seat({
       {!player.connected ? (
         <div className={["text-red-300", compact ? "mt-px text-[9px]" : "mt-1 text-[10px]"].join(" ")}>offline</div>
       ) : null}
+      </div>
     </div>
   );
 }
@@ -1351,9 +1397,11 @@ function Seat({
 function Lobby({
   view,
   onKick,
+  reactions,
 }: {
   view: ClientView;
   onKick: (player: { id: string; name: string }) => void;
+  reactions: LiveReaction[];
 }) {
   const connected = view.players.filter((p) => p.connected);
   const readyCount = connected.filter((p) => p.isHost || p.lobbyReady).length;
@@ -1402,17 +1450,18 @@ function Lobby({
               <li
                 key={p.id}
                 className={[
-                  "lobby-member flex items-center gap-3 rounded-2xl border px-3 py-2.5",
+                  "lobby-member relative flex items-center gap-3 overflow-visible rounded-2xl border px-3 py-2.5",
                   ready && p.connected ? "lobby-member--ready" : "lobby-member--waiting",
                 ].join(" ")}
               >
                 <div
                   className={[
-                    "lobby-avatar grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold",
+                    "lobby-avatar relative grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold",
                     statusClass,
                   ].join(" ")}
                 >
                   {p.name.slice(0, 1).toUpperCase()}
+                  <LobbyReactionBurst reactions={reactionsForPlayer(reactions, p.id)} />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-amber-50">

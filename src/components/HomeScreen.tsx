@@ -69,7 +69,7 @@ export function HomeScreen() {
   }
 
   return (
-    <div className="page-enter app-shell text-amber-50">
+    <div className="app-shell text-amber-50">
       <AppBackground />
 
       <main className="relative z-10 mx-auto flex min-h-dvh w-full max-w-[420px] flex-col px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(5.5rem,env(safe-area-inset-bottom))]">

@@ -34,7 +34,7 @@ export function JoinRoomScreen({
   }
 
   return (
-    <div className="page-enter app-shell text-amber-50">
+    <div className="app-shell text-amber-50">
       <AppBackground />
 
       <main className="relative z-10 mx-auto flex min-h-dvh w-full max-w-lg flex-col justify-center px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-12">

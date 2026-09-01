@@ -17,6 +17,7 @@ import {
   tribute,
 } from "./rooms";
 import { toClientView } from "../lib/engine";
+import { isSafeReactionId, isValidReaction, sanitizeComment, REACTION_COOLDOWN_MS } from "../lib/reactions";
 
 type PlayerSocket = Socket & {
   playerId?: string;
@@ -44,6 +45,7 @@ function presenceKey(code: string, playerId: string) {
 
 const socketCounts = new Map<string, number>();
 const offlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const lastReactionAt = new Map<string, number>();
 
 function clearOfflineTimer(key: string) {
   const timer = offlineTimers.get(key);
@@ -278,6 +280,33 @@ export function attachGameSocket(io: Server) {
       }
       emitRoom(io, result.code);
     });
+
+    socket.on(
+      "reaction",
+      ({ kind, value, id }: { kind?: string; value?: string; id?: string }) => {
+        if (!socket.roomCode || !socket.playerId) return;
+        if (!isValidReaction(kind, value)) return;
+        const key = presenceKey(socket.roomCode, socket.playerId);
+        const now = Date.now();
+        if (now - (lastReactionAt.get(key) ?? 0) < REACTION_COOLDOWN_MS) return;
+        lastReactionAt.set(key, now);
+        const room = getRoom(socket.roomCode);
+        const player = room?.players.find((p) => p.id === socket.playerId);
+        const playerName = player?.name || socket.playerName || "Player";
+        const reactionId = isSafeReactionId(id)
+          ? id
+          : `r-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        const cleanedValue = kind === "comment" ? sanitizeComment(value) : value;
+        if (!cleanedValue) return;
+        io.to(socket.roomCode).emit("reaction", {
+          id: reactionId,
+          playerId: socket.playerId,
+          playerName,
+          kind,
+          value: cleanedValue,
+        });
+      },
+    );
 
     socket.on("disconnect", () => {
       if (!socket.roomCode || !socket.playerId) return;

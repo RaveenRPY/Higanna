@@ -36,7 +36,7 @@ function shouldSkipSplash(pathname: string | null): boolean {
 
 /**
  * Splash on first load and on refresh (home or room lobby).
- * Skipped only when refreshing/reopening a room whose match already started.
+ * App content mounts underneath immediately so the handoff after splash is seamless.
  */
 export function AppBoot({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -67,56 +67,61 @@ export function AppBoot({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (phase === "done") {
-    return <>{children}</>;
-  }
-
   return (
     <>
       <div
-        className={["splash-boot", phase === "leaving" ? "splash-boot--fade" : ""].join(" ")}
-        aria-hidden={phase !== "splash"}
+        className={[
+          "app-boot-stage min-h-full",
+          phase !== "done" ? "app-boot-stage--splash" : "",
+        ].join(" ")}
       >
-        <div className="splash-boot__bg" aria-hidden="true">
-          <div className="app-bg__base" />
-          <div className="app-bg__mesh" />
-          <div className="app-bg__sheen" />
-          <div className="app-bg__orb app-bg__orb--amber" />
-          <div className="app-bg__orb app-bg__orb--emerald" />
-          <div className="app-bg__orb app-bg__orb--rose" />
-          <div className="app-bg__vignette" />
-        </div>
-        <div className="splash-boot__inner">
-          <img
-            src={SPLASH_LOGO_SRC}
-            alt=""
-            width={280}
-            height={280}
-            className="splash-boot__logo"
-            decoding="async"
-            fetchPriority="high"
-            draggable={false}
-          />
-          <div className="splash-boot__progress-wrap">
-            <div
-              className="splash-boot__progress-track"
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={progressOn ? 100 : 0}
-              aria-label="Loading"
-            >
-              <div
-                className="splash-boot__progress-bar"
-                style={{ width: progressOn ? "100%" : "0%" }}
-              />
-            </div>
-            <p className="splash-boot__label">Loading</p>
-          </div>
-        </div>
+        {children}
       </div>
 
-      {phase !== "splash" ? children : null}
+      {phase !== "done" ? (
+        <div
+          className={["splash-boot", phase === "leaving" ? "splash-boot--fade" : ""].join(" ")}
+          aria-hidden={phase !== "splash"}
+        >
+          <div className="splash-boot__bg" aria-hidden="true">
+            <div className="app-bg__base" />
+            <div className="app-bg__mesh" />
+            <div className="app-bg__sheen" />
+            <div className="app-bg__orb app-bg__orb--amber" />
+            <div className="app-bg__orb app-bg__orb--emerald" />
+            <div className="app-bg__orb app-bg__orb--rose" />
+            <div className="app-bg__vignette" />
+          </div>
+          <div className="splash-boot__inner">
+            <img
+              src={SPLASH_LOGO_SRC}
+              alt=""
+              width={280}
+              height={280}
+              className="splash-boot__logo"
+              decoding="async"
+              fetchPriority="high"
+              draggable={false}
+            />
+            <div className="splash-boot__progress-wrap">
+              <div
+                className="splash-boot__progress-track"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progressOn ? 100 : 0}
+                aria-label="Loading"
+              >
+                <div
+                  className="splash-boot__progress-bar"
+                  style={{ width: progressOn ? "100%" : "0%" }}
+                />
+              </div>
+              <p className="splash-boot__label">Loading</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
