@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
+import { AppBackground } from "@/components/AppBackground";
+import { BrandMark } from "@/components/BrandMark";
 import { BackFan, CardFan, CARD_SIZE, PlayingCard, TablePlayStack, type CardSize } from "@/components/PlayingCard";
 import { JoinRoomScreen } from "@/components/JoinRoomScreen";
 import { DealAnimation, dealAnimationMs } from "@/components/DealAnimation";
@@ -14,10 +16,17 @@ import {
   measureFlightRect,
   type CardFlight,
 } from "@/components/CardFlight";
-import { MIN_PLAYERS, sortHand, TURN_DURATION_MS } from "@/lib/engine";
+import { MIN_PLAYERS, sortHand, TURN_DURATION_MS, beggarTributeCardIds, isValidBeggarTribute } from "@/lib/engine";
 import { getShareLink, copyText } from "@/lib/shareLink";
 import { getPlayerId, getPlayerName, getSocket } from "@/lib/socket";
+import {
+  RoleCelebrationLayer,
+  RoleCrown,
+  useRoleCelebrations,
+  playerHasRoleBadge,
+} from "@/components/RoleCelebration";
 import { useNarrow } from "@/lib/useNarrow";
+import { clearGameStarted, markGameStarted } from "@/components/SplashScreen";
 import { RANKS, SUITS, type Card, type ClientView, type JokerDeclaration, type PublicPlayer, type Rank, type Suit } from "@/lib/types";
 
 const ROUND_MSG_MS = 2800;
@@ -107,8 +116,9 @@ export function GameRoom({
   const joinedSessionKey = `higanna-joined-${roomCode}`;
   const [joinName, setJoinName] = useState<string | null>(null);
   const [needsJoinGate, setNeedsJoinGate] = useState(false);
-  const [gateReady, setGateReady] = useState(roomCode === "new");
+  const [gateReady, setGateReady] = useState(true);
   const [view, setView] = useState<ClientView | null>(null);
+  const [joinError, setJoinError] = useState("");
   const [toast, setToast] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
@@ -121,11 +131,13 @@ export function GameRoom({
   const [jokerPrompt, setJokerPrompt] = useState<Card[] | null>(null);
   const [jokerAs, setJokerAs] = useState<Record<string, JokerDeclaration>>({});
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const [kickTarget, setKickTarget] = useState<{ id: string; name: string } | null>(null);
   const [leavingIds, setLeavingIds] = useState<string[]>([]);
   const [ghostIds, setGhostIds] = useState<string[]>([]);
   const [flights, setFlights] = useState<CardFlight[]>([]);
   const [fallbackTurnEndsAt, setFallbackTurnEndsAt] = useState<number | null>(null);
+  const { bursts: roleBursts, dismissBurst: dismissRoleBurst } = useRoleCelebrations(view);
   const flightSeq = useRef(0);
   const flightsRef = useRef<CardFlight[]>([]);
   flightsRef.current = flights;
@@ -137,6 +149,56 @@ export function GameRoom({
   const lastAnnouncement = useRef("");
   const dealStartedAt = useRef(0);
   const msgStartedAt = useRef(0);
+  const leaveConfirmedRef = useRef(false);
+  const activeRoomCodeRef = useRef<string | null>(null);
+  activeRoomCodeRef.current = view?.code ?? null;
+
+  function resolveRoomCode() {
+    return (
+      activeRoomCodeRef.current ??
+      (roomCode !== "new" ? roomCode.toUpperCase() : null)
+    );
+  }
+
+  function requestLeave() {
+    if (!view || leaveConfirmedRef.current) return;
+    setLeaveConfirmOpen(true);
+  }
+
+  function confirmLeave() {
+    if (leaveConfirmedRef.current) return;
+    leaveConfirmedRef.current = true;
+    setLeaveConfirmOpen(false);
+    const code = resolveRoomCode();
+    if (code) {
+      getSocket().emit("leave", { code, playerId: getPlayerId() });
+      clearGameStarted(code);
+      sessionStorage.removeItem(`higanna-joined-${code}`);
+    }
+    joined.current = false;
+    router.push("/");
+  }
+
+  // Trap browser / gesture back while seated in a lobby or match.
+  useEffect(() => {
+    if (!view || leaveConfirmedRef.current) return;
+
+    const trap = () => {
+      window.history.pushState({ higannaLeaveGuard: 1 }, "", window.location.href);
+    };
+    trap();
+
+    const onPopState = () => {
+      if (leaveConfirmedRef.current) return;
+      trap();
+      setLeaveConfirmOpen(true);
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+    };
+  }, [view?.code]);
 
   useEffect(() => {
     if (roomCode === "new") {
@@ -168,15 +230,17 @@ export function GameRoom({
 
     function onState(next: ClientView & { error?: string }) {
       if (next.error && !next.code) {
+        joined.current = false;
+        setJoinError(next.error);
+        setView(null);
         setToast(next.error);
         if (inviteJoin) {
           sessionStorage.removeItem(joinedSessionKey);
-          joined.current = false;
           setNeedsJoinGate(true);
-          setView(null);
         }
         return;
       }
+      setJoinError("");
       setView(next);
       if (roomCode === "new" && next.code) {
         sessionStorage.setItem(`higanna-joined-${next.code}`, "1");
@@ -201,10 +265,26 @@ export function GameRoom({
       setToast(msg);
     }
 
+    function syncRoom() {
+      const code =
+        activeRoomCodeRef.current ??
+        (roomCode !== "new" ? roomCode.toUpperCase() : null);
+      if (code) {
+        socket.emit("join", { code, name, playerId });
+      } else if (roomCode === "new") {
+        socket.emit("create", { name, playerId });
+      }
+    }
+
     socket.on("state", onState);
     socket.on("toast", onToast);
     function onKicked(msg: string) {
+      leaveConfirmedRef.current = true;
       sessionStorage.removeItem(joinedSessionKey);
+      const code =
+        activeRoomCodeRef.current ??
+        (roomCode !== "new" ? roomCode.toUpperCase() : null);
+      if (code) clearGameStarted(code);
       joined.current = false;
       setView(null);
       setToast(typeof msg === "string" && msg ? msg : "The host removed you from the room.");
@@ -212,27 +292,34 @@ export function GameRoom({
     }
     socket.on("kicked", onKicked);
 
-    if (!joined.current) {
-      joined.current = true;
-      if (roomCode === "new") {
-        socket.emit("create", { name, playerId });
-      } else {
-        socket.emit("join", { code: roomCode, name, playerId });
-      }
-    }
+    if (!joined.current) joined.current = true;
+    if (!joinError) syncRoom();
+
+    const onConnect = () => {
+      if (!joinError) syncRoom();
+    };
+    socket.on("connect", onConnect);
 
     return () => {
       socket.off("state", onState);
       socket.off("toast", onToast);
       socket.off("kicked", onKicked);
+      socket.off("connect", onConnect);
     };
-  }, [roomCode, router, needsJoinGate, joinName, joinedSessionKey, gateReady, inviteJoin]);
+  }, [roomCode, router, needsJoinGate, joinName, joinedSessionKey, gateReady, inviteJoin, joinError]);
 
   useEffect(() => {
     if (!view) return;
     const ids = new Set(view.you?.hand.map((c) => c.id) ?? []);
     setSelected((cur) => cur.filter((id) => ids.has(id)));
   }, [view]);
+
+  // Splash skips only after this room's match has left the lobby.
+  useEffect(() => {
+    if (!view?.code) return;
+    if (view.phase === "lobby") clearGameStarted(view.code);
+    else markGameStarted(view.code);
+  }, [view?.code, view?.phase]);
 
   // Deal animation only on the first share after leaving the lobby — not every round.
   useEffect(() => {
@@ -332,6 +419,18 @@ export function GameRoom({
   useEffect(() => {
     const onVis = () => {
       if (document.hidden) return;
+      const name = joinName || getPlayerName();
+      if (!name) return;
+      const socket = getSocket();
+      const playerId = getPlayerId();
+      const code =
+        activeRoomCodeRef.current ??
+        (roomCode !== "new" ? roomCode.toUpperCase() : null);
+      if (code) {
+        socket.emit("join", { code, name, playerId });
+      } else if (roomCode === "new") {
+        socket.emit("create", { name, playerId });
+      }
       const now = Date.now();
       if (
         dealing &&
@@ -350,7 +449,7 @@ export function GameRoom({
       document.removeEventListener("visibilitychange", onVis);
       window.removeEventListener("focus", onVis);
     };
-  }, [dealing, roundCloseMsg, view?.players.length]);
+  }, [dealing, roundCloseMsg, view?.players.length, roomCode, joinName]);
 
   const youId = view?.you?.id;
   const seated = useMemo(() => {
@@ -364,8 +463,13 @@ export function GameRoom({
   const myTurn = view?.currentTurnId === youId;
   const isKing = view?.you?.role === "king";
   const isBeggar = view?.you?.role === "beggar";
+  const beggarTributePick = view?.phase === "tribute" && myTurn && isBeggar;
   const tributePick = view?.phase === "tribute" && myTurn && (isKing || isBeggar);
   const canPick = !dealing && (view?.phase === "playing" || tributePick);
+  const beggarTributeIds = useMemo(() => {
+    if (!beggarTributePick || !view?.you) return [];
+    return beggarTributeCardIds(view.you.hand);
+  }, [beggarTributePick, view?.you]);
   const turnActive =
     Boolean(view?.currentTurnId) &&
     !view?.closing &&
@@ -382,6 +486,18 @@ export function GameRoom({
     }
     setFallbackTurnEndsAt(Date.now() + TURN_DURATION_MS);
   }, [turnActive, view?.currentTurnId, view?.turnEndsAt, view?.phase]);
+
+  useEffect(() => {
+    if (!beggarTributePick || beggarTributeIds.length === 0) return;
+    if (beggarTributeIds.length === 1) {
+      setSelected([beggarTributeIds[0]]);
+      return;
+    }
+    setSelected((cur) => {
+      const valid = cur.filter((id) => beggarTributeIds.includes(id));
+      return valid.length === 1 ? valid : [];
+    });
+  }, [beggarTributePick, beggarTributeIds]);
 
   const turnEndsAt = view?.turnEndsAt ?? fallbackTurnEndsAt;
   const displayHand = useMemo(() => {
@@ -430,7 +546,12 @@ export function GameRoom({
     const isSelected = selected.includes(id);
 
     if (view.phase === "tribute") {
+      if (isBeggar && myTurn && !isValidBeggarTribute(view.you?.hand ?? [], id)) {
+        setToast("You must give your highest card to the King.");
+        return;
+      }
       if (isSelected) {
+        if (isBeggar && myTurn && beggarTributeIds.length === 1) return;
         const from =
           measureFlightRect(`[data-preview-card="${id}"]`, previewSize) ??
           estimateYouSeatPreviewRect(1, 0, previewSize);
@@ -557,8 +678,9 @@ export function GameRoom({
 
   if (!gateReady) {
     return (
-      <div className="grid min-h-dvh place-items-center bg-[#14080a] text-amber-100">
-        <p className="animate-pulse text-sm tracking-wide">Loading...</p>
+      <div className="app-shell grid min-h-dvh place-items-center text-amber-100">
+        <AppBackground />
+        <p className="relative z-10 animate-pulse text-sm tracking-wide">Loading...</p>
       </div>
     );
   }
@@ -573,6 +695,8 @@ export function GameRoom({
             sessionStorage.setItem(joinedSessionKey, "1");
             setJoinName(name);
             setToast("");
+            setJoinError("");
+            joined.current = false;
             setNeedsJoinGate(false);
           }}
         />
@@ -580,27 +704,90 @@ export function GameRoom({
     );
   }
 
+  if (joinError) {
+    return (
+      <div className="app-shell grid min-h-dvh place-items-center px-4 text-amber-50">
+        <AppBackground />
+        <div className="relative z-10 w-full max-w-sm rounded-[22px] border border-amber-300/25 bg-black/60 p-5 text-center shadow-[0_24px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:p-6">
+          <p className="text-[10px] uppercase tracking-[0.35em] text-amber-400/80">Room</p>
+          <p className="mt-2 font-mono text-2xl tracking-[0.28em] text-amber-100">{roomCode}</p>
+          <p className="mt-4 font-serif text-xl text-amber-100">{joinError}</p>
+          <div className="mt-5 flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setJoinError("");
+                setToast("");
+                joined.current = false;
+                setNeedsJoinGate(false);
+              }}
+              className="min-h-12 w-full rounded-full bg-linear-to-b from-amber-300 to-amber-500 text-base font-semibold text-zinc-950"
+            >
+              Try again
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              className="min-h-12 w-full rounded-full border border-amber-200/25 bg-white/5 text-base font-medium text-amber-100"
+            >
+              Go home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!view) {
     return (
-      <div className="grid min-h-dvh place-items-center bg-[#14080a] text-amber-100">
-        <div className="rounded-2xl border border-amber-400/20 bg-black/30 px-6 py-4 shadow-2xl">
-          <p className="animate-pulse text-sm tracking-wide">Joining room...</p>
+      <div className="app-shell relative flex min-h-dvh flex-col select-none text-amber-50">
+        <AppBackground />
+        <header className="relative z-20 mx-auto mt-[max(0.35rem,env(safe-area-inset-top))] w-[calc(100%-1rem)] max-w-6xl sm:mt-3 sm:w-[calc(100%-1.5rem)]">
+          <div className="flex items-center gap-2.5 rounded-full border border-white/10 bg-black/50 py-2.5 pl-2 pr-2.5 shadow-[0_12px_40px_rgba(0,0,0,0.4)] backdrop-blur-xl">
+            <div className="size-11 shrink-0" aria-hidden />
+            <div className="pointer-events-none absolute inset-x-14 top-1/2 z-0 flex -translate-y-1/2 flex-col items-center justify-center gap-0 leading-none">
+              <BrandMark size="header" priority className="mb-1.5 mt-1.5" />
+              <p className="-mt-1 font-mono text-[11px] leading-none tracking-[0.22em] text-amber-400/90 sm:text-xs">
+                {roomCode}
+              </p>
+            </div>
+            <span className="flex-1" />
+            <div className="size-11 shrink-0" aria-hidden />
+          </div>
+        </header>
+        <div className="flex-1">
+          <div className="mx-auto mt-4 w-[calc(100%-1rem)] max-w-lg px-0 pb-[max(1rem,env(safe-area-inset-bottom))] sm:mt-6">
+            <div className="lobby-panel rounded-[24px] border border-white/10 p-4 shadow-[0_12px_40px_rgba(0,0,0,0.4)] sm:p-5">
+              <div className="flex items-end justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-[0.28em] text-amber-400/75">Table</p>
+                  <h2 className="mt-1 font-serif text-2xl text-amber-200">Lobby</h2>
+                </div>
+                <p className="animate-pulse text-right text-xs text-amber-100/50">Reconnecting…</p>
+              </div>
+              <ul className="mt-4 space-y-2" aria-hidden>
+                {[0, 1, 2].map((i) => (
+                  <li key={i} className="h-[3.25rem] animate-pulse rounded-2xl border border-white/5 bg-white/5" />
+                ))}
+              </ul>
+            </div>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="relative flex min-h-dvh flex-col overflow-x-hidden bg-[#12070a] text-amber-50 select-none">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,#6b1d25_0%,transparent_58%),radial-gradient(ellipse_at_bottom,#1a3d2e_0%,transparent_52%)]" />
+    <div className="app-shell relative flex min-h-dvh flex-col select-none text-amber-50">
+      <AppBackground />
       <header className="relative z-20 mx-auto mt-[max(0.35rem,env(safe-area-inset-top))] w-[calc(100%-1rem)] max-w-6xl sm:mt-3 sm:w-[calc(100%-1.5rem)]">
         <div className="flex items-center gap-2.5 rounded-full border border-white/10 bg-black/50 py-2.5 pl-2 pr-2.5 shadow-[0_12px_40px_rgba(0,0,0,0.4)] backdrop-blur-xl">
           {/* The top bar layout uses absolute centering for the name/code stack, so it's centered regardless of left/right actions */}
           <button
             type="button"
-            onClick={() => router.push("/")}
+            onClick={requestLeave}
             className="grid size-11 shrink-0 place-items-center rounded-full bg-white/6 text-base text-amber-100/80 hover:bg-white/10"
-            aria-label="Home"
+            aria-label="Leave room"
             style={{ position: "relative", zIndex: 10 }}
           >
             <svg
@@ -615,8 +802,8 @@ export function GameRoom({
             </svg>
           </button>
 
-          <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center min-w-0" style={{zIndex: 0}}>
-            <div className="truncate font-serif text-xl leading-none text-amber-200 sm:text-2xl mb-0.5 pt-2">හිඟන්නා</div>
+          <div className="pointer-events-none absolute inset-x-14 top-1/2 z-0 flex -translate-y-1/2 flex-col items-center justify-center gap-0 leading-none">
+            <BrandMark size="header" priority className="mb-1.5 mt-1.5" />
             <button
               type="button"
               onClick={async () => {
@@ -626,11 +813,12 @@ export function GameRoom({
                   window.setTimeout(() => setCopied(false), 1500);
                 }
               }}
-              className="font-mono text-[11px] tracking-[0.22em] text-amber-400/90 hover:text-amber-300 sm:text-xs px-1"
-              style={{marginTop: "-2px"}}
+              className="pointer-events-auto -mt-1 px-0 font-mono text-[11px] leading-none tracking-[0.22em] text-amber-400/90 hover:text-amber-300 sm:text-xs"
             >
               {view.code}
-              <span className="ml-1 hidden tracking-normal text-amber-200/40 sm:inline">{copied ? "copied" : "tap to copy"}</span>
+              <span className="ml-1 hidden tracking-normal text-amber-200/40 sm:inline">
+                {copied ? "copied" : "tap to copy"}
+              </span>
             </button>
           </div>
 
@@ -690,15 +878,28 @@ export function GameRoom({
             <button
               type="button"
               onClick={() => setStopConfirmOpen(true)}
-              className="inline-flex h-11 shrink-0 items-center rounded-full border border-red-300/35 bg-red-950/55 px-3.5 text-xs font-semibold uppercase tracking-wide text-red-100"
+              className="grid size-11 shrink-0 place-items-center rounded-full border border-red-300/35 bg-red-950/55 text-red-100"
+              aria-label="Stop game"
             >
-              Stop
+              <svg
+                className="h-6 w-6"
+                aria-hidden="true"
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                fill="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path d="M7 5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H7Z" />
+              </svg>
             </button>
           ) : null}
         </div>
       </header>
 
       {toast ? <ErrorDialog message={toast} onDismiss={() => setToast("")} /> : null}
+
+      <RoleCelebrationLayer bursts={roleBursts} onDismiss={dismissRoleBurst} />
 
       {roundCloseMsg ? (
         <div className="pointer-events-none fixed inset-0 z-40 grid place-items-center px-4">
@@ -719,6 +920,22 @@ export function GameRoom({
             setJokerAs({});
           }}
           onConfirm={() => submitPlay(jokerAs)}
+        />
+      ) : null}
+
+      {leaveConfirmOpen ? (
+        <ConfirmModal
+          title={view.phase === "lobby" ? "Leave this room?" : "Leave the game?"}
+          message={
+            view.phase === "lobby"
+              ? "You will be removed from the lobby and need an invite to join again."
+              : "You will be removed from this room. The match continues without you."
+          }
+          confirmLabel="Leave"
+          cancelLabel="Stay"
+          danger
+          onCancel={() => setLeaveConfirmOpen(false)}
+          onConfirm={confirmLeave}
         />
       ) : null}
 
@@ -760,7 +977,7 @@ export function GameRoom({
       ) : null}
 
       {view.phase === "lobby" ? (
-        <div key="lobby" className="phase-enter flex-1">
+        <div key="lobby" className="flex-1">
           <Lobby view={view} onKick={(p) => setKickTarget(p)} />
         </div>
       ) : (
@@ -779,7 +996,7 @@ export function GameRoom({
               <p className="px-2 font-serif text-sm text-emerald-50/90 sm:text-lg">
                 {view.phase === "tribute"
                   ? view.players.find((p) => p.role === "beggar")?.id === view.currentTurnId
-                    ? "හිඟන්නා chooses a card for රජු"
+                    ? "හිඟන්නා gives their highest card to රජු"
                     : "රජු gives a card to හිඟන්නා"
                   : view.phase === "finished"
                     ? "Round over"
@@ -824,6 +1041,7 @@ export function GameRoom({
               previewSize={previewSize}
               isYou={p.id === youId}
               isTurn={p.id === view.currentTurnId && !view.closing}
+              showRoleCrown={playerHasRoleBadge(p, view.phase)}
               dealtCount={dealing ? (dealReceived[p.id] ?? 0) : undefined}
               turnEndsAt={p.id === view.currentTurnId && !view.closing ? turnEndsAt : null}
               previewCards={
@@ -858,9 +1076,10 @@ export function GameRoom({
 
       <CardFlightLayer flights={flights} onFlightEnd={endFlight} />
 
+      {view.phase !== "lobby" && view.phase !== "finished" ? (
       <section
         className={[
-          "relative z-20 mx-auto mt-auto mb-[max(0.75rem,env(safe-area-inset-bottom))] w-[calc(100%-0.75rem)] max-w-6xl rounded-[22px] border border-amber-300/15 bg-black/30 px-2.5 pb-3 pt-3 shadow-[0_20px_45px_rgba(0,0,0,0.35)] backdrop-blur-md sm:mt-3 sm:mb-4 sm:w-[calc(100%-1.5rem)] sm:rounded-[28px] sm:px-5 sm:pb-7 sm:pt-4",
+          "relative z-20 mx-auto mt-2 mb-[max(0.5rem,env(safe-area-inset-bottom))] w-[calc(100%-0.75rem)] max-w-6xl rounded-[22px]  bg-black/30 px-2.5 pb-3 pt-3 shadow-[0_20px_45px_rgba(0,0,0,0.35)] backdrop-blur-md sm:mt-3 sm:mb-4 sm:w-[calc(100%-1.5rem)] sm:rounded-[28px] sm:px-5 sm:pb-7 sm:pt-4",
           (myTurn && !view.closing && !view.you?.passed) || tributePick
             ? "turn-hand-attention"
             : "",
@@ -874,7 +1093,7 @@ export function GameRoom({
                   {dealing
                     ? "Dealing cards…"
                     : view.phase === "tribute" && isBeggar && myTurn
-                    ? "You are හිඟන්නා — pick a card for රජු"
+                    ? "You are හිඟන්නා — give your highest card to රජු"
                     : view.phase === "tribute" && isKing && myTurn
                     ? "You are රජු — pick a card for හිඟන්නා"
                     : view.phase === "tribute" && isKing
@@ -887,6 +1106,8 @@ export function GameRoom({
                       ? "Round closing…"
                       : view.you.passed
                         ? "You passed — wait until this round closes"
+                        : myTurn && view.canEndRound
+                          ? "Everyone passed — keep playing solo or end the round"
                         : myTurn
                           ? "Your turn — play or pass"
                           : "Your hand"}
@@ -904,6 +1125,8 @@ export function GameRoom({
               selectedIds={selected}
               leavingIds={leavingIds}
               ghostIds={ghostIds}
+              highlightIds={beggarTributePick ? beggarTributeIds : []}
+              dimOthers={beggarTributePick}
               onSelect={canPick ? toggle : undefined}
               dealIn={dealing}
               emptyLabel={dealing ? "" : "No cards in hand"}
@@ -912,6 +1135,24 @@ export function GameRoom({
             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
                 {view.phase === "playing" && myTurn && !view.you.passed && !view.closing && !dealing ? (
                   <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+                    {view.canEndRound ? (
+                      <button
+                        type="button"
+                        onClick={() => getSocket().emit("endRound")}
+                        className="min-h-12 rounded-full border border-emerald-300/40 bg-emerald-400/15 px-5 text-base font-semibold text-emerald-100 sm:min-h-0 sm:py-2 sm:text-sm"
+                      >
+                        End round
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => getSocket().emit("pass")}
+                        disabled={!view.lastPlay}
+                        className="min-h-12 rounded-full border border-amber-200/30 bg-amber-100/5 px-5 text-base text-amber-100 disabled:opacity-40 sm:min-h-0 sm:py-2 sm:text-sm"
+                      >
+                        Pass
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={onPlayClick}
@@ -919,14 +1160,6 @@ export function GameRoom({
                       className="min-h-12 rounded-full bg-linear-to-b from-amber-300 to-amber-500 px-5 text-base font-semibold text-zinc-950 shadow-[0_8px_24px_rgba(212,175,55,0.25)] disabled:opacity-40 sm:min-h-0 sm:py-2 sm:text-sm"
                     >
                       Play
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => getSocket().emit("pass")}
-                      disabled={!view.lastPlay}
-                      className="min-h-12 rounded-full border border-amber-200/30 bg-amber-100/5 px-5 text-base text-amber-100 disabled:opacity-40 sm:min-h-0 sm:py-2 sm:text-sm"
-                    >
-                      Pass
                     </button>
                   </div>
                 ) : null}
@@ -939,6 +1172,10 @@ export function GameRoom({
                         window.setTimeout(() => setToast(""), 3000);
                         return;
                       }
+                      if (isBeggar && view.you && !isValidBeggarTribute(view.you.hand, selected[0])) {
+                        setToast("You must give your highest card to the King.");
+                        return;
+                      }
                       getSocket().emit("tribute", { cardId: selected[0] });
                       setSelected([]);
                     }}
@@ -947,20 +1184,12 @@ export function GameRoom({
                     {isBeggar ? "Give to රජු" : "Give to හිඟන්නා"}
                   </button>
                 ) : null}
-                {view.you.isHost && view.phase === "finished" ? (
-                  <button
-                    type="button"
-                    onClick={() => getSocket().emit("start")}
-                    className="min-h-12 w-full rounded-full bg-linear-to-b from-emerald-300 to-emerald-500 px-5 text-base font-semibold text-emerald-950 shadow-[0_8px_24px_rgba(16,185,129,0.25)] sm:min-h-0 sm:w-auto sm:py-2 sm:text-sm"
-                  >
-                    New round
-                  </button>
-                ) : null}
             </div>
           </>
         ) : null}
 
       </section>
+      ) : null}
     </div>
   );
 }
@@ -977,6 +1206,7 @@ function Seat({
   dealtCount,
   compact = false,
   previewSize = "md",
+  showRoleCrown = false,
 }: {
   player: PublicPlayer;
   style: CSSProperties;
@@ -989,10 +1219,12 @@ function Seat({
   dealtCount?: number;
   compact?: boolean;
   previewSize?: CardSize;
+  showRoleCrown?: boolean;
 }) {
   const showPreview = Boolean(isYou && previewCards && previewCards.length > 0);
   const ghostSet = new Set(ghostIds);
-  const roleLabel = player.role ? ROLE_LABEL[player.role] : player.isHost ? "Host" : null;
+  const roleLabel =
+    !showRoleCrown && player.role ? ROLE_LABEL[player.role] : player.isHost ? "Host" : null;
   const shownCount = dealtCount ?? player.cardCount;
   const slot = CARD_SIZE[previewSize];
   const youLabel = isYou ? (compact ? " · you" : " (You)") : "";
@@ -1006,6 +1238,9 @@ function Seat({
       data-seat-id={player.id}
       data-you-seat={isYou ? "1" : undefined}
     >
+      {showRoleCrown && player.role ? (
+        <RoleCrown role={player.role} compact={compact} className={compact ? "mb-0.5" : "mb-1"} />
+      ) : null}
       {showPreview ? (
         <div className={["flex items-end justify-center", compact ? "gap-1" : "gap-1.5"].join(" ")}>
           {previewCards!.map((card, i) => {
@@ -1128,33 +1363,53 @@ function Lobby({
 
   return (
     <div className="mx-auto mt-4 w-[calc(100%-1rem)] max-w-lg px-0 pb-[max(1rem,env(safe-area-inset-bottom))] sm:mt-6">
-      <div className="rounded-[24px] border border-white/10 bg-black/40 p-4 shadow-[0_20px_45px_rgba(0,0,0,0.35)] backdrop-blur-md sm:p-5">
+      <div className="lobby-panel rounded-[24px] border border-white/10 p-4 shadow-[0_12px_40px_rgba(0,0,0,0.4)] sm:p-5">
         <div className="flex items-end justify-between gap-3">
           <div>
             <p className="text-[10px] font-medium uppercase tracking-[0.28em] text-amber-400/75">Table</p>
             <h2 className="mt-1 font-serif text-2xl text-amber-200">Lobby</h2>
           </div>
-          <p className="text-right text-xs text-amber-100/55">
+          <p className="text-right text-xs text-amber-100/70">
             {readyCount}/{connected.length} ready
-            <span className="mt-0.5 block text-amber-100/35">min {MIN_PLAYERS}</span>
+            <span className="mt-0.5 block text-amber-100/45">
+              {view.players.length} seated · min {MIN_PLAYERS}
+            </span>
           </p>
         </div>
 
         <ul className="mt-4 space-y-2">
           {view.players.map((p) => {
             const isYou = p.id === view.you?.id;
-            const ready = p.isHost || p.lobbyReady;
+            const ready = p.connected && (p.isHost || p.lobbyReady);
+            const statusClass = !p.connected
+              ? "lobby-avatar--offline"
+              : ready
+                ? "lobby-avatar--ready"
+                : "lobby-avatar--waiting";
+            const statusLabel = !p.connected
+              ? "Offline"
+              : p.isHost
+                ? "Host"
+                : ready
+                  ? "Ready"
+                  : "Waiting";
+            const badgeClass = !p.connected
+              ? "lobby-badge--offline"
+              : ready
+                ? "lobby-badge--ready"
+                : "lobby-badge--waiting";
             return (
               <li
                 key={p.id}
-                className="flex items-center gap-3 rounded-2xl border border-white/8 bg-white/4 px-3 py-2.5"
+                className={[
+                  "lobby-member flex items-center gap-3 rounded-2xl border px-3 py-2.5",
+                  ready && p.connected ? "lobby-member--ready" : "lobby-member--waiting",
+                ].join(" ")}
               >
                 <div
                   className={[
-                    "grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold",
-                    ready
-                      ? "bg-emerald-400/20 text-emerald-200"
-                      : "bg-amber-200/10 text-amber-100/70",
+                    "lobby-avatar grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold",
+                    statusClass,
                   ].join(" ")}
                 >
                   {p.name.slice(0, 1).toUpperCase()}
@@ -1164,15 +1419,20 @@ function Lobby({
                     {p.name}
                     {isYou ? " · you" : ""}
                   </p>
-                  <p className="text-[11px] text-amber-100/50">
-                    {p.isHost ? "Host" : ready ? "Ready" : "Waiting"}
-                  </p>
                 </div>
+                <span
+                  className={[
+                    "lobby-badge shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide",
+                    badgeClass,
+                  ].join(" ")}
+                >
+                  {statusLabel}
+                </span>
                 {view.you?.isHost && !p.isHost ? (
                   <button
                     type="button"
                     onClick={() => onKick({ id: p.id, name: p.name })}
-                    className="min-h-10 shrink-0 rounded-full border border-red-300/25 px-3 text-xs font-semibold text-red-200"
+                    className="min-h-10 shrink-0 rounded-full border border-red-300/40 bg-red-950/80 px-3 text-xs font-semibold text-red-200"
                   >
                     Kick
                   </button>
@@ -1192,7 +1452,7 @@ function Lobby({
             >
               Start game
             </button>
-            <p className="mt-2 text-center text-xs text-amber-100/45">
+            <p className="mt-2 text-center text-xs text-amber-100/55">
               {connected.length < MIN_PLAYERS
                 ? `Need ${MIN_PLAYERS - connected.length} more player${MIN_PLAYERS - connected.length === 1 ? "" : "s"}.`
                 : allReady
@@ -1213,13 +1473,13 @@ function Lobby({
               }}
               className={
                 youReady
-                  ? "mt-4 min-h-12 w-full rounded-full border border-emerald-300/40 bg-emerald-400/15 text-base font-semibold text-emerald-100"
+                  ? "lobby-ready-btn--on mt-4 min-h-12 w-full rounded-full text-base font-semibold"
                   : "mt-4 min-h-12 w-full rounded-full bg-linear-to-b from-amber-300 to-amber-500 text-base font-semibold text-zinc-950 shadow-[0_8px_24px_rgba(212,175,55,0.25)]"
               }
             >
               {youReady ? "Ready · tap to undo" : "Ready"}
             </button>
-            <p className="mt-2 text-center text-xs text-amber-100/45">
+            <p className="mt-2 text-center text-xs text-amber-100/55">
               {youReady ? "Waiting for the host to start." : "Tap Ready when you want to play."}
             </p>
           </>
@@ -1234,11 +1494,24 @@ function Results({ view }: { view: ClientView }) {
   const queen = view.players.find((p) => p.role === "queen");
   const beggar = view.players.find((p) => p.role === "beggar");
   return (
-    <div className="relative z-20 mx-auto mt-3 w-[calc(100%-1rem)] max-w-md rounded-[22px] border border-amber-400/30 bg-black/70 p-4 text-center shadow-[0_20px_45px_rgba(0,0,0,0.35)] backdrop-blur sm:mt-4 sm:w-[calc(100%-1.5rem)] sm:rounded-3xl sm:p-5">
+    <div className="relative z-20 mx-auto mt-3 mb-2 w-[calc(100%-1rem)] max-w-md rounded-[22px] border border-amber-400/30 bg-black/70 p-4 text-center shadow-[0_20px_45px_rgba(0,0,0,0.35)] backdrop-blur sm:mt-4 sm:w-[calc(100%-1.5rem)] sm:rounded-3xl sm:p-5">
       <h2 className="font-serif text-xl text-amber-200 sm:text-2xl">Titles</h2>
-      <p className="mt-3 text-amber-100">රජු — {king?.name ?? "—"}</p>
-      <p className="text-amber-100">රැජින — {queen?.name ?? "—"}</p>
-      <p className="text-amber-300">හිඟන්නා — {beggar?.name ?? "—"}</p>
+      <div className="mt-4 space-y-2">
+        <p className="text-base text-amber-100 sm:text-lg">රජු — {king?.name ?? "—"}</p>
+        <p className="text-base text-amber-100 sm:text-lg">රැජින — {queen?.name ?? "—"}</p>
+        <p className="text-base text-amber-300 sm:text-lg">හිඟන්නා — {beggar?.name ?? "—"}</p>
+      </div>
+      {view.you?.isHost ? (
+        <button
+          type="button"
+          onClick={() => getSocket().emit("start")}
+          className="mt-5 min-h-12 w-full rounded-full bg-linear-to-b from-emerald-300 to-emerald-500 px-5 text-base font-semibold text-emerald-950 shadow-[0_8px_24px_rgba(16,185,129,0.25)] sm:min-h-0 sm:py-2.5 sm:text-sm"
+        >
+          New round
+        </button>
+      ) : (
+        <p className="mt-4 text-xs text-amber-100/50">Waiting for the host to start the next round.</p>
+      )}
     </div>
   );
 }
@@ -1253,11 +1526,11 @@ function ErrorDialog({ message, onDismiss }: { message: string; onDismiss: () =>
   }, [message]);
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center px-4">
+    <div className="pointer-events-none fixed inset-0 z-50 flex items-end justify-center px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:items-center sm:px-4 sm:pb-0">
       <button
         type="button"
         onClick={() => dismissRef.current()}
-        className="ui-pop pointer-events-auto w-full max-w-[340px] rounded-2xl border border-amber-300/35 bg-[#1a0c10]/92 px-5 py-4 text-center shadow-[0_16px_40px_rgba(0,0,0,0.5)] backdrop-blur-md"
+        className="ui-pop pointer-events-auto w-full max-w-[340px] rounded-3xl border border-amber-300/35 bg-[#1a0c10]/92 px-5 py-4 text-center shadow-[0_16px_40px_rgba(0,0,0,0.5)] backdrop-blur-md"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="error-dialog-title"
@@ -1302,8 +1575,8 @@ function ConfirmModal({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:items-center sm:px-4 sm:pb-0">
-      <div className="ui-pop w-full max-w-md rounded-t-3xl border border-amber-300/25 bg-[#1a0c10] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.55)] sm:rounded-3xl sm:p-6">
-        <p className="text-xs uppercase tracking-[0.3em] text-amber-400/80">හිඟන්නා</p>
+      <div className="ui-pop w-full max-w-md rounded-3xl border border-amber-300/25 bg-[#1a0c10] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.55)] sm:p-6">
+        <BrandMark size="mark" className="opacity-90" />
         <h2 className="mt-2 font-serif text-xl text-amber-100 sm:text-2xl">{title}</h2>
         <p className="mt-2 text-sm leading-relaxed text-amber-100/65">{message}</p>
         <div className="mt-5 flex flex-col-reverse gap-2 sm:mt-6 sm:flex-row sm:flex-wrap sm:justify-end">
@@ -1354,7 +1627,7 @@ function JokerDeclareModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:items-center sm:px-4 sm:pb-0">
-      <div className="ui-pop max-h-[min(92dvh,720px)] w-full max-w-lg overflow-auto rounded-t-3xl border border-amber-300/25 bg-[#1a0c10] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.55)] sm:rounded-3xl sm:p-6">
+      <div className="ui-pop max-h-[min(92dvh,720px)] w-full max-w-lg overflow-auto rounded-3xl border border-amber-300/25 bg-[#1a0c10] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.55)] sm:p-6">
         <p className="text-xs uppercase tracking-[0.3em] text-amber-400/80">Joker</p>
         <h2 className="mt-1 font-serif text-xl text-amber-100 sm:text-2xl">What does this joker represent?</h2>
         <p className="mt-1 text-sm text-amber-100/60">

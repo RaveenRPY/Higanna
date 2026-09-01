@@ -6,8 +6,10 @@ import {
   joinRoom,
   kickFromLobby,
   leaveRoom,
+  markOffline,
   pass,
   play,
+  endRound,
   setLobbyReady,
   setRoomUpdateListener,
   startGame,
@@ -22,6 +24,9 @@ type PlayerSocket = Socket & {
   playerName?: string;
 };
 
+/** Keep players in the game while the app is backgrounded; only go offline after a long absence. */
+const DISCONNECT_GRACE_MS = 30 * 60 * 1000;
+
 function emitRoom(io: Server, code: string) {
   const room = ensureTurnClock(code) ?? getRoom(code);
   if (!room) {
@@ -30,6 +35,46 @@ function emitRoom(io: Server, code: string) {
   }
   for (const p of room.players) {
     io.to(`player:${p.id}`).emit("state", toClientView(room, p.id));
+  }
+}
+
+function presenceKey(code: string, playerId: string) {
+  return `${code}:${playerId}`;
+}
+
+const socketCounts = new Map<string, number>();
+const offlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearOfflineTimer(key: string) {
+  const timer = offlineTimers.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    offlineTimers.delete(key);
+  }
+}
+
+function trackSocketJoin(code: string, playerId: string) {
+  const key = presenceKey(code, playerId);
+  socketCounts.set(key, (socketCounts.get(key) ?? 0) + 1);
+  clearOfflineTimer(key);
+}
+
+function trackSocketDisconnect(io: Server, code: string, playerId: string) {
+  const key = presenceKey(code, playerId);
+  const next = Math.max(0, (socketCounts.get(key) ?? 1) - 1);
+  if (next === 0) {
+    socketCounts.delete(key);
+    clearOfflineTimer(key);
+    const timer = setTimeout(() => {
+      offlineTimers.delete(key);
+      if ((socketCounts.get(key) ?? 0) > 0) return;
+      markOffline(code, playerId);
+      const room = getRoom(code);
+      if (room) emitRoom(io, code);
+    }, DISCONNECT_GRACE_MS);
+    offlineTimers.set(key, timer);
+  } else {
+    socketCounts.set(key, next);
   }
 }
 
@@ -43,6 +88,7 @@ export function attachGameSocket(io: Server) {
         return;
       }
       if (socket.roomCode && getRoom(socket.roomCode)) {
+        trackSocketJoin(socket.roomCode, playerId);
         emitRoom(io, socket.roomCode);
         return;
       }
@@ -52,7 +98,7 @@ export function attachGameSocket(io: Server) {
       socket.playerName = name;
       socket.join(view.code);
       socket.join(`player:${playerId}`);
-      incLive(view.code, playerId);
+      trackSocketJoin(view.code, playerId);
       emitRoom(io, view.code);
     });
 
@@ -73,10 +119,23 @@ export function attachGameSocket(io: Server) {
         socket.playerName = name;
         socket.join(result.code);
         socket.join(`player:${playerId}`);
-        incLive(result.code, playerId);
+        trackSocketJoin(result.code, playerId);
         emitRoom(io, result.code);
       },
     );
+
+    socket.on("leave", ({ code, playerId }: { code?: string; playerId?: string }) => {
+      const roomCode = code || socket.roomCode;
+      const id = playerId || socket.playerId;
+      if (!roomCode || !id) return;
+      const key = presenceKey(roomCode, id);
+      clearOfflineTimer(key);
+      socketCounts.delete(key);
+      leaveRoom(roomCode, id);
+      const room = getRoom(roomCode);
+      if (room) emitRoom(io, roomCode);
+      else io.to(roomCode).emit("state", { error: "The room was closed." });
+    });
 
     socket.on("start", () => {
       if (!socket.roomCode || !socket.playerId) return;
@@ -156,7 +215,6 @@ export function attachGameSocket(io: Server) {
         jokerAs?: Record<string, { rank: string; suit: string }>;
       }) => {
         if (!socket.roomCode || !socket.playerId) return;
-        // Convert jokerAs to proper JokerDeclaration types
         let jokerDeclarations: Record<string, any> = {};
         if (jokerAs) {
           jokerDeclarations = Object.fromEntries(
@@ -179,7 +237,7 @@ export function attachGameSocket(io: Server) {
                   | "2",
                 suit: value.suit as "spades" | "hearts" | "clubs" | "diamonds",
               },
-            ])
+            ]),
           );
         }
         const result = play(socket.roomCode, socket.playerId, cardIds, jokerDeclarations);
@@ -201,6 +259,16 @@ export function attachGameSocket(io: Server) {
       emitRoom(io, result.code);
     });
 
+    socket.on("endRound", () => {
+      if (!socket.roomCode || !socket.playerId) return;
+      const result = endRound(socket.roomCode, socket.playerId);
+      if ("error" in result) {
+        socket.emit("toast", result.error);
+        return;
+      }
+      emitRoom(io, result.code);
+    });
+
     socket.on("tribute", ({ cardId }: { cardId: string }) => {
       if (!socket.roomCode || !socket.playerId) return;
       const result = tribute(socket.roomCode, socket.playerId, cardId);
@@ -213,34 +281,7 @@ export function attachGameSocket(io: Server) {
 
     socket.on("disconnect", () => {
       if (!socket.roomCode || !socket.playerId) return;
-      const code = socket.roomCode;
-      const playerId = socket.playerId;
-      setTimeout(() => {
-        if (decLive(code, playerId) > 0) return;
-        leaveRoom(code, playerId);
-        const room = getRoom(code);
-        if (room) emitRoom(io, code);
-        else io.to(code).emit("state", { error: "The room was closed." });
-      }, 1500);
+      trackSocketDisconnect(io, socket.roomCode, socket.playerId);
     });
   });
-}
-
-const live = new Map<string, number>();
-
-function liveKey(code: string, playerId: string) {
-  return `${code}:${playerId}`;
-}
-
-function incLive(code: string, playerId: string) {
-  const key = liveKey(code, playerId);
-  live.set(key, (live.get(key) ?? 0) + 1);
-}
-
-function decLive(code: string, playerId: string): number {
-  const key = liveKey(code, playerId);
-  const next = Math.max(0, (live.get(key) ?? 1) - 1);
-  if (next === 0) live.delete(key);
-  else live.set(key, next);
-  return next;
 }

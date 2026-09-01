@@ -3,6 +3,7 @@ import {
   autoActOnTimeout,
   createRoom,
   generateRoomCode,
+  markPlayerDisconnected,
   passTurn,
   playCards,
   removePlayer,
@@ -14,6 +15,7 @@ import {
   syncTurnDeadline,
   toClientView,
   tributeCard,
+  endSoloTrick,
 } from "../lib/engine";
 import type { ClientView, JokerDeclaration, RoomState } from "../lib/types";
 
@@ -102,7 +104,7 @@ export function joinRoom(
   name: string,
 ): ClientView | { error: string } {
   const room = rooms.get(code.toUpperCase());
-  if (!room) return { error: "Room not found. Check the code." };
+  if (!room) return { error: "This room doesn’t exist. Check the code and try again." };
   const joined = addPlayer(room, { id: playerId, name: name.trim() || "Player" });
   if ("error" in joined) return joined;
   const withClock = syncTurnDeadline(room, joined);
@@ -124,6 +126,12 @@ export function leaveRoom(code: string, playerId: string): void {
   const withClock = syncTurnDeadline(room, next);
   rooms.set(code, withClock);
   scheduleTurnTimeout(code, withClock);
+}
+
+export function markOffline(code: string, playerId: string) {
+  const result = mutate(code, (room) => markPlayerDisconnected(room, playerId));
+  if (!("error" in result)) onRoomUpdated?.(result.code);
+  return result;
 }
 
 export function mutate(
@@ -181,6 +189,10 @@ export function play(
 
 export function pass(code: string, playerId: string) {
   return mutate(code, (room) => passTurn(room, playerId));
+}
+
+export function endRound(code: string, playerId: string) {
+  return mutate(code, (room) => endSoloTrick(room, playerId));
 }
 
 export function tribute(code: string, playerId: string, cardId: string) {

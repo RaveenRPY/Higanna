@@ -6,7 +6,15 @@ let socket: Socket | null = null;
 
 export function getSocket(): Socket {
   if (!socket) {
-    socket = io({ autoConnect: true, transports: ["websocket", "polling"] });
+    socket = io({
+      autoConnect: true,
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
+      timeout: 60000,
+    });
   }
   return socket;
 }

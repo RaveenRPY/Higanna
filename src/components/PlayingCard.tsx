@@ -40,6 +40,7 @@ export function PlayingCard({
   selected = false,
   dimmed = false,
   lifted = false,
+  highlighted = false,
   onClick,
   className = "",
   style,
@@ -48,6 +49,7 @@ export function PlayingCard({
   size?: CardSize;
   selected?: boolean;
   dimmed?: boolean;
+  highlighted?: boolean;
   lifted?: boolean;
   onClick?: () => void;
   className?: string;
@@ -57,9 +59,11 @@ export function PlayingCard({
   const radius = CARD_RADIUS[size];
   const inner = (
     <div
-      className={["relative h-full w-full overflow-hidden bg-white", selected ? "ring-2 ring-amber-400" : ""].join(
-        " ",
-      )}
+      className={[
+        "relative h-full w-full overflow-hidden bg-white",
+        selected ? "ring-2 ring-amber-400" : "",
+        highlighted && !selected ? "tribute-card-glow ring-2 ring-amber-300" : "",
+      ].join(" ")}
       style={{
         borderRadius: radius,
         boxShadow: "2px 3px 10px rgba(0,0,0,0.28)",
@@ -129,6 +133,8 @@ export function CardFan({
   selectedIds = [],
   leavingIds = [],
   ghostIds = [],
+  highlightIds = [],
+  dimOthers = false,
   onSelect,
   dealIn = false,
   emptyLabel,
@@ -140,6 +146,10 @@ export function CardFan({
   leavingIds?: string[];
   /** Cards mid-flight — keep layout slot but hide the face. */
   ghostIds?: string[];
+  /** Cards to emphasize (e.g. හිඟන්නා's highest tribute card). */
+  highlightIds?: string[];
+  /** When true, non-highlighted cards are faded and not selectable. */
+  dimOthers?: boolean;
   onSelect?: (id: string) => void;
   dealIn?: boolean;
   emptyLabel?: string;
@@ -160,6 +170,7 @@ export function CardFan({
 
   const selectedSet = new Set(selectedIds);
   const ghostSet = new Set(ghostIds);
+  const highlightSet = new Set(highlightIds);
   // Selected cards leave the hand — they preview on your seat instead.
   const visible = cards.filter((c) => !selectedSet.has(c.id));
   const n = visible.length;
@@ -210,6 +221,9 @@ export function CardFan({
         const dx = (i - mid) * step;
         const rot = (i - mid) * rotStep;
         const ghost = ghostSet.has(card.id);
+        const highlighted = highlightSet.has(card.id);
+        const dimmed = dimOthers && highlightIds.length > 0 && !highlighted;
+        const selectable = onSelect && !ghost && !dimmed;
         return (
           <div
             key={card.id}
@@ -246,7 +260,9 @@ export function CardFan({
                 <PlayingCard
                   card={card}
                   size={size}
-                  onClick={onSelect && !ghost ? () => onSelect(card.id) : undefined}
+                  highlighted={highlighted}
+                  dimmed={dimmed}
+                  onClick={selectable ? () => onSelect(card.id) : undefined}
                   className="relative!"
                   style={{ position: "relative" }}
                 />

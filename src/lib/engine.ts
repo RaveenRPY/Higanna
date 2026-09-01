@@ -200,6 +200,32 @@ export function addPlayer(
   };
 }
 
+export function markPlayerDisconnected(state: RoomState, playerId: string): RoomState {
+  const disconnected: RoomState = {
+    ...state,
+    players: state.players.map((p) =>
+      p.id === playerId
+        ? {
+            ...p,
+            connected: false,
+            ...(state.phase === "lobby" ? { lobbyReady: false } : {}),
+          }
+        : p,
+    ),
+  };
+  if (
+    (disconnected.phase === "playing" || disconnected.phase === "tribute") &&
+    disconnected.currentTurnId === playerId
+  ) {
+    const nid =
+      disconnected.phase === "tribute"
+        ? nextActiveId(disconnected, playerId)
+        : nextPlayableId(disconnected, playerId);
+    return { ...disconnected, currentTurnId: nid };
+  }
+  return disconnected;
+}
+
 export function removePlayer(state: RoomState, playerId: string): RoomState | null {
   if (state.phase === "lobby") {
     const players = state.players.filter((p) => p.id !== playerId);
@@ -413,11 +439,31 @@ function patternLabel(pattern: Pattern): string {
 }
 
 function highestCard(hand: Card[]): Card {
-  return [...hand].sort((a, b) => {
-    if (a.joker && !b.joker) return -1;
-    if (!a.joker && b.joker) return 1;
-    return cardStrength(b) - cardStrength(a);
-  })[0];
+  const ids = beggarTributeCardIds(hand);
+  if (ids.length === 0) return hand[0];
+  const pickId = [...ids].sort()[0];
+  return hand.find((c) => c.id === pickId) ?? hand[0];
+}
+
+/** Highest strength among cards (undeclared jokers count as strongest). */
+export function maxTributeStrength(hand: Card[]): number {
+  if (hand.length === 0) return -1;
+  return Math.max(...hand.map(cardStrength));
+}
+
+/** All cards tied for highest — හිඟන්නා must give one of these to රජු. */
+export function beggarTributeCardIds(hand: Card[]): string[] {
+  const max = maxTributeStrength(hand);
+  if (max < 0) return [];
+  return hand.filter((c) => cardStrength(c) === max).map((c) => c.id);
+}
+
+export function isValidBeggarTribute(hand: Card[], cardId: string): boolean {
+  return beggarTributeCardIds(hand).includes(cardId);
+}
+
+export function highestTributeCard(hand: Card[]): Card {
+  return highestCard(hand);
 }
 
 function deal(state: RoomState): RoomState {
@@ -450,10 +496,10 @@ function beginTribute(state: RoomState): RoomState {
     phase: "tribute",
     currentTurnId: beggar.id,
     log: [
-      `හිඟන්නා (${beggar.name}) must choose a card for රජු (${king.name}).`,
+      `හිඟන්නා (${beggar.name}) must give their highest card to රජු (${king.name}).`,
       ...state.log,
     ].slice(0, 40),
-    announcement: `හිඟන්නා — choose a card for රජු.`,
+    announcement: `හිඟන්නා — give your highest card to රජු.`,
   };
 }
 
@@ -790,13 +836,20 @@ export function playCards(
     );
   }
 
-  // If every other active player has already passed, this player wins the trick and leads.
+  // Everyone else has passed — this player can keep playing solo or end the round.
   const othersCanStillPlay = turnPlayers(next).some((p) => p.id !== playerId && !p.passed);
   if (!othersCanStillPlay) {
     const stillIn = (player(next, playerId)?.hand.length ?? 0) > 0;
-    const leader = stillIn ? playerId : nextActiveId(next, playerId)!;
-    const leaderName = player(next, leader)?.name ?? actor.name;
-    return armTrickClose(next, leader, `${leaderName} takes the round! ${leaderName} leads.`, 1000);
+    if (!stillIn) {
+      const leader = nextActiveId(next, playerId)!;
+      const leaderName = player(next, leader)?.name ?? actor.name;
+      return armTrickClose(next, leader, `${actor.name} went out! ${leaderName} leads.`, 1000);
+    }
+    return {
+      ...next,
+      currentTurnId: playerId,
+      announcement: `${actor.name} can keep playing solo or end the round.`,
+    };
   }
 
   const nxt = nextPlayableId(next, playerId);
@@ -830,16 +883,74 @@ export function passTurn(state: RoomState, playerId: string): RoomState | { erro
   };
 
   // Only count connected players — never treat disconnect as an auto-pass.
-  const others = turnPlayers(marked).filter((p) => p.id !== marked.lastPlay!.playerId);
-  if (others.length === 0 || others.every((p) => p.passed)) {
-    return closeForLeader(marked.lastPlay!.playerId);
+  const leaderId = marked.lastPlay!.playerId;
+  const others = turnPlayers(marked).filter((p) => p.id !== leaderId);
+  if (others.length === 0) {
+    return closeForLeader(leaderId);
+  }
+  if (others.every((p) => p.passed)) {
+    const leader = player(marked, leaderId);
+    if (!leader || leader.hand.length === 0) {
+      return closeForLeader(leaderId);
+    }
+    return {
+      ...marked,
+      currentTurnId: leaderId,
+      announcement: `${leader.name} can keep playing solo or end the round.`,
+      log: [
+        `Everyone else passed — ${leader.name} can continue solo.`,
+        ...marked.log,
+      ].slice(0, 40),
+    };
   }
 
   const nxt = nextPlayableId(marked, playerId);
   if (!nxt || nxt === playerId) {
-    return closeForLeader(marked.lastPlay!.playerId);
+    return closeForLeader(leaderId);
   }
   return { ...marked, currentTurnId: nxt };
+}
+
+/** Remaining player ends the current trick after everyone else has passed. */
+export function endSoloTrick(
+  state: RoomState,
+  playerId: string,
+): RoomState | { error: string } {
+  if (state.phase !== "playing") return { error: "It is not time to end a round." };
+  if (state.pendingClose) return { error: "This round is already closing." };
+  if (state.currentTurnId !== playerId) return { error: "It is not your turn." };
+  if (!state.lastPlay) return { error: "There is no round to end yet." };
+
+  const actor = player(state, playerId);
+  if (!actor) return { error: "Player not found." };
+  if (actor.passed) return { error: "You already passed this round." };
+
+  const others = turnPlayers(state).filter((p) => p.id !== playerId);
+  if (others.length > 0 && !others.every((p) => p.passed)) {
+    return { error: "You can only end the round when everyone else has passed." };
+  }
+
+  const leaderHasCards = actor.hand.length > 0;
+  const leader = leaderHasCards ? playerId : nextActiveId(state, playerId)!;
+  const leaderName = player(state, leader)?.name ?? actor.name;
+  return armTrickClose(
+    {
+      ...state,
+      log: [`${actor.name} ended the round.`, ...state.log].slice(0, 40),
+    },
+    leader,
+    `${actor.name} ends the round! ${leaderName} leads.`,
+    1000,
+  );
+}
+
+export function canEndSoloTrick(state: RoomState, playerId: string): boolean {
+  if (state.phase !== "playing" || state.pendingClose) return false;
+  if (state.currentTurnId !== playerId || !state.lastPlay) return false;
+  const actor = player(state, playerId);
+  if (!actor || actor.passed || actor.hand.length === 0) return false;
+  const others = turnPlayers(state).filter((p) => p.id !== playerId);
+  return others.length > 0 && others.every((p) => p.passed);
 }
 
 export function beggarGiveCard(
@@ -855,6 +966,9 @@ export function beggarGiveCard(
   if (state.currentTurnId !== beggar.id) return { error: "Wait for your turn to give a card." };
   const card = beggar.hand.find((c) => c.id === cardId);
   if (!card) return { error: "That card is not in your hand." };
+  if (!isValidBeggarTribute(beggar.hand, cardId)) {
+    return { error: "හිඟන්නා must give their highest card to රජු." };
+  }
 
   const players = state.players.map((p) => {
     if (p.id === beggar.id) return { ...p, hand: sortHand(p.hand.filter((c) => c.id !== cardId)) };
@@ -944,6 +1058,7 @@ export function toClientView(state: RoomState, viewerId?: string): ClientView {
     log: state.log,
     announcement: state.announcement,
     closing: Boolean(state.pendingClose),
+    canEndRound: viewerId ? canEndSoloTrick(state, viewerId) : false,
     players: state.players.map((p) => ({
       id: p.id,
       name: p.name,
@@ -1013,6 +1128,16 @@ export function autoActOnTimeout(state: RoomState, playerId: string): RoomState 
   }
 
   if (state.phase !== "playing") return { error: "It is not time to play." };
+
+  if (canEndSoloTrick(state, playerId)) {
+    const result = endSoloTrick(state, playerId);
+    if ("error" in result) return result;
+    const name = player(state, playerId)?.name ?? "Player";
+    return {
+      ...result,
+      log: [`${name} timed out — ended the round.`, ...result.log].slice(0, 40),
+    };
+  }
 
   if (state.lastPlay) {
     const result = passTurn(state, playerId);

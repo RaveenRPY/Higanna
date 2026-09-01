@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Cinzel, Noto_Serif_Sinhala, Poppins } from "next/font/google";
+import { AppBoot } from "@/components/SplashScreen";
+import { MINI_LOGO_SRC, SPLASH_LOGO_SRC } from "@/lib/brand";
 import "./globals.css";
 
 const sinhala = Noto_Serif_Sinhala({
@@ -43,8 +45,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${poppins.variable} ${sinhala.variable} ${cinzel.variable} h-full antialiased`} suppressHydrationWarning>
-      <body className="min-h-full" suppressHydrationWarning>
-        {children}
+      <head>
+        <link rel="preload" href={SPLASH_LOGO_SRC} as="image" type="image/webp" />
+        <link rel="preload" href={MINI_LOGO_SRC} as="image" type="image/webp" />
+      </head>
+      <body className="min-h-full bg-[#12070a]" suppressHydrationWarning>
+        <AppBoot>{children}</AppBoot>
       </body>
     </html>
   );

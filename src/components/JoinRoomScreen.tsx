@@ -2,6 +2,8 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { AppBackground } from "@/components/AppBackground";
+import { BrandMark } from "@/components/BrandMark";
 import { getPlayerName, setPlayerName } from "@/lib/socket";
 
 export function JoinRoomScreen({
@@ -32,12 +34,10 @@ export function JoinRoomScreen({
   }
 
   return (
-    <div className="page-enter relative min-h-dvh overflow-x-hidden bg-[#14080a] text-amber-50">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,#6b1d25_0%,transparent_55%),radial-gradient(ellipse_at_bottom,#1a3d2e_0%,transparent_50%)]" />
-      <div className="pointer-events-none absolute -left-20 top-24 h-64 w-64 rounded-full bg-amber-600/10 blur-3xl" />
-      <div className="pointer-events-none absolute -right-16 bottom-10 h-72 w-72 rounded-full bg-emerald-500/10 blur-3xl" />
+    <div className="page-enter app-shell text-amber-50">
+      <AppBackground />
 
-      <main className="relative mx-auto flex min-h-dvh w-full max-w-lg flex-col justify-center px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-12">
+      <main className="relative z-10 mx-auto flex min-h-dvh w-full max-w-lg flex-col justify-center px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-12">
         <form
           onSubmit={submit}
           className="rounded-[22px] border border-amber-300/20 bg-[linear-gradient(140deg,rgba(255,255,255,0.06),rgba(255,255,255,0.02))] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:rounded-[28px] sm:p-8"
@@ -45,12 +45,25 @@ export function JoinRoomScreen({
           <button
             type="button"
             onClick={() => router.push("/")}
-            className="inline-flex min-h-11 items-center text-xs uppercase tracking-wide text-amber-200/60 hover:text-amber-100"
+            className="inline-flex min-h-11 items-center gap-2 rounded-full bg-white/6 px-3.5 text-sm font-medium text-amber-100/80 hover:bg-white/10"
           >
-            ← Home
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-5 w-5 shrink-0"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+              aria-hidden="true"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+            Home
           </button>
 
-          <h1 className="mt-5 font-serif text-[2.65rem] leading-none text-amber-200 sm:mt-6 sm:text-6xl">හිඟන්නා</h1>
+          <h1 className="mt-5 flex sm:mt-6">
+            <BrandMark size="title" priority />
+          </h1>
           <p className="mt-3 text-sm text-amber-100/70">Join this room — enter your name to sit at the table.</p>
 
           <div className="mt-6 rounded-2xl border border-amber-400/25 bg-black/30 px-4 py-3 text-center">

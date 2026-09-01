@@ -129,6 +129,8 @@ export type ClientView = {
   announcement: string | null;
   /** True while last play is held on the table before the round closes. */
   closing: boolean;
+  /** Remaining player can keep playing solo or choose to end the trick. */
+  canEndRound: boolean;
   /**
    * Consecutive +1 chain length this trick (opening window is first 3 plays).
    */
