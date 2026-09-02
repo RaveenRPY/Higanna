@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClientView, PublicPlayer, Role } from "@/lib/types";
+import { playRoleSfx } from "@/lib/sounds";
 
 const ROLE_LABEL: Record<Role, string> = {
   king: "රජු",
@@ -202,6 +203,7 @@ export function useRoleCelebrations(view: ClientView | null) {
 
     prevRolesRef.current = next;
     if (fresh.length > 0) {
+      for (const burst of fresh) playRoleSfx(burst.role);
       setBursts((current) => [...current, ...fresh]);
     }
   }, [view]);

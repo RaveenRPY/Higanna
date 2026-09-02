@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { CardBack, CARD_SIZE } from "@/components/PlayingCard";
 import { estimateHandCardRect, type FlightRect } from "@/components/CardFlight";
+import { playSfx } from "@/lib/sounds";
 
 const WINDUP_MS = 280;
 const STAGGER_MS = 52;
@@ -173,6 +174,7 @@ export function DealAnimation({
               };
               setFlyers((cur) => [...cur, flyer]);
               setRemaining(Math.max(0, Math.min(8, total - index - 1)));
+              playSfx("deal");
             }, delay),
           );
 

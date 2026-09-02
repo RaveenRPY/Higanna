@@ -16,6 +16,7 @@ import {
   type TableReaction,
 } from "@/lib/reactions";
 import { getPlayerId, getPlayerName, getSocket } from "@/lib/socket";
+import { playSfx } from "@/lib/sounds";
 
 const MAX_PER_PLAYER = 3;
 
@@ -94,6 +95,7 @@ export function useTableReactions() {
         const next: LiveReaction = { ...payload, bornAt: Date.now() };
         const others = cur.filter((r) => r.playerId !== payload.playerId);
         const mine = cur.filter((r) => r.playerId === payload.playerId);
+        queueMicrotask(() => playSfx("reaction"));
         return [...others, ...mine.slice(-(MAX_PER_PLAYER - 1)), next];
       });
     }
@@ -151,14 +153,8 @@ export function useTableReactions() {
       return [...others, ...mine.slice(-(MAX_PER_PLAYER - 1)), payload];
     });
     setCooldownUntil(nextCooldown);
+    playSfx("reaction");
     getSocket().emit("reaction", { id, kind, value: nextValue });
-    if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
-      try {
-        navigator.vibrate(12);
-      } catch {
-        /* iOS Safari throws when vibration is unavailable */
-      }
-    }
     setPickerOpen(false);
     return true;
   }, []);

@@ -37,6 +37,8 @@ import {
 } from "@/components/PlayerReactions";
 import { useNarrow } from "@/lib/useNarrow";
 import { clearGameStarted, markGameStarted } from "@/components/SplashScreen";
+import { SfxButton, useGameSfx } from "@/components/GameSfx";
+import { playSfx } from "@/lib/sounds";
 import { RANKS, SUITS, type Card, type ClientView, type JokerDeclaration, type PublicPlayer, type Rank, type Suit } from "@/lib/types";
 
 const ROUND_MSG_MS = 2800;
@@ -81,9 +83,23 @@ function TurnTimerBadge({
   compact?: boolean;
 }) {
   const remaining = useTurnRemaining(endsAt);
-  if (endsAt == null) return null;
+  const prevSec = useRef<number | null>(null);
   const ms = remaining ?? 0;
-  const urgent = ms <= 10_000;
+  const urgent = endsAt != null && ms <= 10_000;
+  const sec = Math.ceil(ms / 1000);
+
+  useEffect(() => {
+    if (!urgent || sec <= 0) {
+      prevSec.current = urgent ? 0 : null;
+      return;
+    }
+    if (prevSec.current !== sec) {
+      playSfx("tick");
+      prevSec.current = sec;
+    }
+  }, [urgent, sec]);
+
+  if (endsAt == null) return null;
   return (
     <div
       className={[
@@ -157,6 +173,7 @@ export function GameRoom({
     cooling: reactionCooling,
     cooldownRatio,
   } = useTableReactions();
+  useGameSfx(view, dealing, toast);
   const flightSeq = useRef(0);
   const flightsRef = useRef<CardFlight[]>([]);
   flightsRef.current = flights;
@@ -571,6 +588,7 @@ export function GameRoom({
       }
       if (isSelected) {
         if (isBeggar && myTurn && beggarTributeIds.length === 1) return;
+        playSfx("deselect");
         const from =
           measureFlightRect(`[data-preview-card="${id}"]`, previewSize) ??
           estimateYouSeatPreviewRect(1, 0, previewSize);
@@ -587,6 +605,7 @@ export function GameRoom({
         spawnFlight({ card, from, to });
         return;
       }
+      playSfx("select");
       const from =
         measureFlightRect(`[data-hand-card="${id}"]`, handSize) ??
         estimateHandCardRect(displayHand.filter((c) => !selected.includes(c.id)).length || 1, 0, handSize, narrow);
@@ -601,6 +620,7 @@ export function GameRoom({
     }
 
     if (isSelected) {
+      playSfx("deselect");
       const idx = selected.indexOf(id);
       const from =
         measureFlightRect(`[data-preview-card="${id}"]`, previewSize) ??
@@ -618,6 +638,7 @@ export function GameRoom({
       return;
     }
 
+    playSfx("select");
     const handVisible = displayHand.filter((c) => !selected.includes(c.id));
     const handIndex = handVisible.findIndex((c) => c.id === id);
     const from =
@@ -848,6 +869,8 @@ export function GameRoom({
             cooldownRatio={cooldownRatio}
             open={pickerOpen}
           />
+
+          <SfxButton />
 
           <button
             type="button"
